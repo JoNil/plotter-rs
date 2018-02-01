@@ -8,7 +8,7 @@ struct MouseState {
     wheel: f32,
 }
 
-pub fn run<F: FnMut(&Ui) -> bool>(title: String, clear_color: [f32; 4], mut run_ui: F) {
+pub fn run<F: FnMut(&Ui) -> bool>(title: &str, clear_color: [f32; 4], mut run_ui: F) {
     use glium::glutin;
     use glium::{Display, Surface};
     use imgui_glium_renderer::Renderer;
@@ -22,6 +22,8 @@ pub fn run<F: FnMut(&Ui) -> bool>(title: String, clear_color: [f32; 4], mut run_
 
     let mut imgui = ImGui::init();
     imgui.set_ini_filename(None);
+    imgui.style_mut().window_rounding = 0.0;
+    
     let mut renderer = Renderer::init(&mut imgui, &display).expect("Failed to initialize renderer");
 
     configure_keys(&mut imgui);
@@ -105,8 +107,11 @@ pub fn run<F: FnMut(&Ui) -> bool>(title: String, clear_color: [f32; 4], mut run_
         update_mouse(&mut imgui, &mut mouse_state);
 
         let gl_window = display.gl_window();
-        let size_points = gl_window.get_inner_size_points().unwrap();
-        let size_pixels = gl_window.get_inner_size_pixels().unwrap();
+        let size_pixels = gl_window.get_inner_size().unwrap();
+        let size_points = {
+            let hidpi = gl_window.hidpi_factor();
+            ((size_pixels.0 as f32 / hidpi) as u32, (size_pixels.1 as f32 / hidpi) as u32)
+        };
 
         let ui = imgui.frame(size_points, size_pixels, delta_s);
         if !run_ui(&ui) {
