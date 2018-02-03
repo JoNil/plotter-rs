@@ -14,9 +14,21 @@ use imgui::{
     Ui,
 };
 
-use glium::glutin;
-use glium::{Display, Surface};
 use imgui_glium_renderer::Renderer;
+
+use glium::glutin::{
+    Api,
+    ContextBuilder,
+    EventsLoop,
+    GlProfile,
+    GlRequest,
+    WindowBuilder,
+};
+
+use glium::{
+    Display,
+    Surface,
+};
 
 struct State {
     data: ImString,
@@ -44,7 +56,7 @@ fn run_ui(ui: &Ui, state: &mut State) -> bool {
 
             ui.input_text(im_str!("Test"), &mut state.data).build();
 
-            ui.text(im_str!("Fps: {:.1}", ui.framerate()));
+            ui.text(im_str!("Fps: {:.1} {:.2} ms", ui.framerate(), 1000.0 / ui.framerate()));
         });
 
     true
@@ -58,12 +70,17 @@ struct MouseState {
 }
 
 fn main() {
-    let mut events_loop = glutin::EventsLoop::new();
-    let context = glutin::ContextBuilder::new().with_vsync(true);
-    let window = glutin::WindowBuilder::new()
-        .with_title("plotter-rs")
-        .with_dimensions(1024, 768);
-    let display = Display::new(window, context, &events_loop).unwrap();
+    let mut events_loop = EventsLoop::new();
+
+    let display = {
+        let context = ContextBuilder::new()
+            .with_gl_profile(GlProfile::Core)
+            .with_gl(GlRequest::Specific(Api::OpenGl, (4, 3)));
+        let window = WindowBuilder::new()
+            .with_title("plotter-rs")
+            .with_dimensions(1024, 768);
+        Display::new(window, context, &events_loop).unwrap()
+    };
 
     let mut imgui = ImGui::init();
     imgui.set_ini_filename(None);
