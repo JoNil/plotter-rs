@@ -1,7 +1,7 @@
 [package]
 name = "plotter-rs"
 version = "0.1.0"
-authors = ["Jonathan"]
+authors = ["Jonathan Nilsson"]
 
 [dependencies]
 glium = { version = "0.19", default-features = true }
@@ -9,3 +9,4 @@ glutin = "0.11"
 imgui = { version = "0.0.18" }
 imgui-glium-renderer = { version = "0.0.18" }
 imgui-sys = { version = "0.0.18", features = ["glium"] }
+time = "0.1.39"
