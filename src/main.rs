@@ -110,6 +110,10 @@ fn open_file(path: &str, state: &mut State) {
                             }
                         }
                     }
+
+                    if block.data.len() != 0 {
+                        blocks.lock().unwrap().push(block);
+                    }
                 } else {
                     println!("Not a text file");
                 }
