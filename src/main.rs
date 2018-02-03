@@ -1,8 +1,12 @@
+extern crate arrayvec;
+
 extern crate glium;
 
 #[macro_use]
 extern crate imgui;
 extern crate imgui_glium_renderer;
+
+extern crate nfd;
 
 extern crate time;
 
@@ -10,7 +14,6 @@ use imgui::{
     ImGui,
     ImGuiCond,
     ImGuiKey,
-    ImString,
     Ui,
 };
 
@@ -30,8 +33,97 @@ use glium::{
     Surface,
 };
 
+use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+mod timer;
+
+struct Block {
+    data: arrayvec::ArrayVec<[f64; 4096]>,
+}
+
+impl Block {
+    fn new() -> Block {
+        Block {
+            data: arrayvec::ArrayVec::new(),
+        }
+    }
+}
+
 struct State {
-    data: ImString,
+
+    loading: Arc<AtomicBool>,
+    loading_thread: Option<thread::JoinHandle<()>>,
+
+    blocks: Arc<Mutex<Vec<Block>>>,
+}
+
+impl State {
+    fn new() -> State {
+        State {
+            loading: Arc::new(AtomicBool::new(false)),
+            loading_thread: None,
+            blocks: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+fn open_file(path: &str, state: &mut State) {
+
+    if !state.loading.compare_and_swap(false, true, Ordering::SeqCst) {
+
+        state.blocks.lock().unwrap().clear();
+
+        let blocks = state.blocks.clone();
+        let loading = state.loading.clone();
+        let owned_path = path.to_owned();
+
+        state.loading_thread = Some(thread::spawn(move || {
+
+            let mut t = timer::Timer::new();
+
+            let is_text_file = owned_path.ends_with(".txt");
+
+            if let Ok(file) = File::open(&owned_path) {
+
+                let reader = BufReader::new(&file);
+
+                if is_text_file {
+
+                    let mut block = Block::new();
+
+                    for maybe_line in reader.lines() {
+
+                        if let Ok(line) = maybe_line {
+                            if let Ok(val) = line.parse::<f64>() {
+
+                                if block.data.is_full() {
+                                    blocks.lock().unwrap().push(block);
+                                    block = Block::new();
+                                }
+
+                                block.data.push(val);
+                            }
+                        }
+                    }
+                } else {
+                    println!("Not a text file");
+                }
+            }
+
+            println!("Load time: {}", t.reset());
+
+            loading.store(false, Ordering::SeqCst);
+        }));
+    }
+}
+
+fn save_file(path: &str, state: &State) {
+
 }
 
 fn run_ui(ui: &Ui, state: &mut State) -> bool {
@@ -43,18 +135,41 @@ fn run_ui(ui: &Ui, state: &mut State) -> bool {
         .resizable(false)
         .title_bar(false)
         .collapsible(false)
+        .menu_bar(true)
         .build(|| {
-            ui.text(im_str!("Hello world!"));
-            ui.text(im_str!("This...is...imgui-rs!"));
-            ui.separator();
-            let mouse_pos = ui.imgui().mouse_pos();
-            ui.text(im_str!(
-                "Mouse Position: ({:.1},{:.1})",
-                mouse_pos.0,
-                mouse_pos.1
-            ));
 
-            ui.input_text(im_str!("Test"), &mut state.data).build();
+            ui.menu_bar(|| {
+                ui.menu(im_str!("File")).build(|| {
+                    if ui.menu_item(im_str!("Open"))
+                        .enabled(!state.loading.load(Ordering::SeqCst))
+                        .build() {
+
+                        if let Ok(nfd::Response::Okay(path)) = nfd::open_file_dialog(Some("txt,pf"), None) {
+                            open_file(&path, state);
+                        }
+                    }
+                    if ui.menu_item(im_str!("Save"))
+                        .enabled(!state.loading.load(Ordering::SeqCst))
+                        .build() {
+
+                        if let Ok(nfd::Response::Okay(path)) = nfd::open_save_dialog(Some("pf"), None) {
+                            save_file(&path, state);
+                        }
+                    }
+
+                    if ui.menu_item(im_str!("Close"))
+                        .enabled(!state.loading.load(Ordering::SeqCst) &&
+                            state.blocks.lock().unwrap().len() > 0)
+                        .build() {
+
+                        state.blocks.lock().unwrap().clear();
+                    }
+                });
+            });
+
+            ui.text(im_str!("Hello world!"));
+
+            ui.text(im_str!("Data size: {}", state.blocks.lock().unwrap().len()));
 
             ui.text(im_str!("Fps: {:.1} {:.2} ms", ui.framerate(), 1000.0 / ui.framerate()));
         });
@@ -108,13 +223,11 @@ fn main() {
     imgui.set_imgui_key(ImGuiKey::Y, 17);
     imgui.set_imgui_key(ImGuiKey::Z, 18);
 
-    let mut last_frame = time::precise_time_s();
+    let mut frame_timer = timer::Timer::new();
     let mut mouse_state = MouseState::default();
     let mut quit = false;
 
-    let mut state = State {
-        data: ImString::with_capacity(128),
-    };
+    let mut state = State::new();
 
     loop {
         events_loop.poll_events(|event| {
@@ -183,10 +296,6 @@ fn main() {
             }
         });
 
-        let now = time::precise_time_s();
-        let delta = now - last_frame;
-        last_frame = now;
-
         {
             let scale = imgui.display_framebuffer_scale();
 
@@ -216,7 +325,7 @@ fn main() {
             ((size_pixels.0 as f32 / hidpi) as u32, (size_pixels.1 as f32 / hidpi) as u32)
         };
 
-        let ui = imgui.frame(size_points, size_pixels, delta as f32);
+        let ui = imgui.frame(size_points, size_pixels, frame_timer.reset() as f32);
         if !run_ui(&ui, &mut state) {
             break;
         }
