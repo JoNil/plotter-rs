@@ -173,8 +173,6 @@ fn run_ui(ui: &Ui, state: &mut State) -> bool {
                 });
             });
 
-            ui.text(im_str!("Hello world!"));
-
             ui.text(im_str!("Data size: {}", state.blocks.lock().unwrap().len()));
 
             ui.text(im_str!("Fps: {:.1} {:.2} ms", ui.framerate(), 1000.0 / ui.framerate()));

@@ -5,12 +5,12 @@ authors = ["Jonathan Nilsson"]
 
 [dependencies]
 arrayvec = "0.4.7"
-crossbeam = "0.3.0"
-glium = { version = "0.19", default-features = true }
-glutin = "0.11"
-imgui = { version = "0.0.18" }
-imgui-glium-renderer = { version = "0.0.18" }
-imgui-sys = { version = "0.0.18", features = ["glium"] }
+glium = "0.20"
+glutin = "0.12"
+imgui = { path = "../imgui-rs" }
+imgui-sys = { path = "../imgui-rs/imgui-sys" }
+imgui-glium-renderer = { path = "../imgui-rs/imgui-glium-renderer" }
 nfd = "0.0.4"
-rand = "0.4.2"
 time = "0.1.39"
+
+[workspace]
