@@ -14,6 +14,7 @@ use imgui::{
     ImGui,
     ImGuiCond,
     ImGuiKey,
+    ImVec2,
     Ui,
 };
 
@@ -171,6 +172,14 @@ fn run_ui(ui: &Ui, state: &mut State) -> bool {
                         state.blocks.lock().unwrap().clear();
                     }
                 });
+            });
+
+            ui.with_window_draw_list(|d| {
+                d.add_line(
+                    ImVec2::new(0.0, 0.0),
+                    ImVec2::new(400.0, 400.0),
+                    0xff00ffff,
+                    1.0);
             });
 
             ui.text(im_str!("Data size: {}", state.blocks.lock().unwrap().len()));
