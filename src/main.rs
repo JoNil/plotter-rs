@@ -144,7 +144,8 @@ fn run_ui(ui: &Ui, state: &mut State) -> bool {
                         .enabled(!state.loading.load(Ordering::SeqCst))
                         .build() {
 
-                        if let Ok(nfd::Response::Okay(path)) = nfd::open_file_dialog(Some("txt,pf"), None) {
+                        if let Ok(nfd::Response::Okay(path)) =
+                            nfd::open_file_dialog(Some("txt,pf"), None) {
                             open_file(&path, state);
                         }
                     }
@@ -152,7 +153,8 @@ fn run_ui(ui: &Ui, state: &mut State) -> bool {
                         .enabled(!state.loading.load(Ordering::SeqCst))
                         .build() {
 
-                        if let Ok(nfd::Response::Okay(path)) = nfd::open_save_dialog(Some("pf"), None) {
+                        if let Ok(nfd::Response::Okay(path)) =
+                            nfd::open_save_dialog(Some("pf"), None) {
                             save_file(&path, state);
                         }
                     }
