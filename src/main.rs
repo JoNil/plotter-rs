@@ -175,17 +175,26 @@ fn run_ui(ui: &Ui, state: &mut State) -> bool {
             });
 
             ui.with_window_draw_list(|d| {
-                d.add_line(
-                    ImVec2::new(0.0, 0.0),
-                    ImVec2::new(400.0, 400.0),
-                    0xff00ffff,
-                    1.0);
 
-                d.add_circle(
-                    ImVec2::new(400.0, 400.0),
-                    10.0,
-                    0xdf00dfff,
-                    10);
+                let blocks = state.blocks.lock().unwrap();
+                let mut x = 0.0;
+
+                let mut points = Vec::new();
+
+                for block in blocks.iter().skip(100).take(3) {
+                    for val in block.data.iter() {
+                        points.push(ImVec2::new(x, 400.0 + 5.0 * *val as f32));
+
+                        x += 1.0;
+                    }
+                }
+
+                d.add_poly_line(
+                            &points,
+                            0xdf00dfff,
+                            false,
+                            1.0,
+                            true);
             });
 
             ui.text(im_str!("Data size: {}", state.blocks.lock().unwrap().len()));
