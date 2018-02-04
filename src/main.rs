@@ -34,6 +34,7 @@ use glium::{
     Surface,
 };
 
+use std::cmp::max;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -55,12 +56,24 @@ impl Block {
     }
 }
 
+fn get_block(blocks: &[Block], x: i32) -> Option<&Block> {
+    let idx = x / 4096;
+
+    if idx < blocks.len() as i32{
+        Some(&blocks[idx as usize])
+    } else {
+        None
+    }
+}
+
 struct State {
 
     loading: Arc<AtomicBool>,
     loading_thread: Option<thread::JoinHandle<()>>,
 
     blocks: Arc<Mutex<Vec<Block>>>,
+
+    points: Vec<ImVec2>,
 }
 
 impl State {
@@ -69,6 +82,7 @@ impl State {
             loading: Arc::new(AtomicBool::new(false)),
             loading_thread: None,
             blocks: Arc::new(Mutex::new(Vec::new())),
+            points: Vec::new(),
         }
     }
 }
@@ -177,20 +191,30 @@ fn run_ui(ui: &Ui, state: &mut State) -> bool {
             ui.with_window_draw_list(|d| {
 
                 let blocks = state.blocks.lock().unwrap();
-                let mut x = 0.0;
 
-                let mut points = Vec::new();
+                let width = ui.imgui().display_size().0 as i32;
 
-                for block in blocks.iter().skip(100).take(3) {
-                    for val in block.data.iter() {
-                        points.push(ImVec2::new(x, 400.0 + 5.0 * *val as f32));
 
-                        x += 1.0;
+                {
+                    let capacity = state.points.capacity();
+                    state.points.clear();
+                    state.points.reserve_exact(max(capacity as i32 - width, 0) as usize);
+                }
+
+                for x in 0..width {
+
+                    if let Some(block) = get_block(&blocks, x) {
+
+                        let value = block.data[(x % 4096) as usize];
+
+                        state.points.push(ImVec2::new(x as f32, (400.0 + 5.0*value) as f32));
+                    } else {
+                        break;
                     }
                 }
 
                 d.add_poly_line(
-                            &points,
+                            &state.points,
                             0xdf00dfff,
                             false,
                             1.0,
