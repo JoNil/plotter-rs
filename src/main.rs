@@ -180,6 +180,12 @@ fn run_ui(ui: &Ui, state: &mut State) -> bool {
                     ImVec2::new(400.0, 400.0),
                     0xff00ffff,
                     1.0);
+
+                d.add_circle(
+                    ImVec2::new(400.0, 400.0),
+                    10.0,
+                    0xdf00dfff,
+                    10);
             });
 
             ui.text(im_str!("Data size: {}", state.blocks.lock().unwrap().len()));
