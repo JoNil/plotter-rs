@@ -8,9 +8,12 @@ arrayvec = "0.4.7"
 glium = "0.20"
 glutin = "0.12"
 imgui = { path = "../imgui-rs" }
-imgui-sys = { path = "../imgui-rs/imgui-sys" }
 imgui-glium-renderer = { path = "../imgui-rs/imgui-glium-renderer" }
+imgui-sys = { path = "../imgui-rs/imgui-sys" }
 nfd = "0.0.4"
 time = "0.1.39"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser"] }
 
 [workspace]
