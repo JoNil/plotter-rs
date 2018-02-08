@@ -12,7 +12,7 @@ fn main() {
     let between = rand::distributions::Range::new(-1.0f64, 1.0);
     let mut rng = rand::thread_rng();
 
-    for i in 0..10_000_000 {
+    for i in 0..500_000_000 {
         let a = between.ind_sample(&mut rng);
 
         if i % 1_000_000 < 500_000 {
