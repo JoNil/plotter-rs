@@ -50,14 +50,54 @@ use std::thread;
 mod timer;
 
 struct Block {
-    data: arrayvec::ArrayVec<[f64; 4096]>,
+    data0: arrayvec::ArrayVec<[f64; 4096]>,
+    data1: arrayvec::ArrayVec<[f64; 2048]>,
+    data2: arrayvec::ArrayVec<[f64; 1024]>,
+    data3: arrayvec::ArrayVec<[f64; 512]>,
+    data4: arrayvec::ArrayVec<[f64; 256]>,
+    data5: arrayvec::ArrayVec<[f64; 128]>,
+    data6: arrayvec::ArrayVec<[f64; 64]>,
+    data7: arrayvec::ArrayVec<[f64; 32]>,
+    data8: arrayvec::ArrayVec<[f64; 16]>,
+    data9: arrayvec::ArrayVec<[f64; 8]>,
 }
 
 impl Block {
     fn new() -> Block {
         Block {
-            data: arrayvec::ArrayVec::new(),
+            data0: arrayvec::ArrayVec::new(),
+            data1: arrayvec::ArrayVec::new(),
+            data2: arrayvec::ArrayVec::new(),
+            data3: arrayvec::ArrayVec::new(),
+            data4: arrayvec::ArrayVec::new(),
+            data5: arrayvec::ArrayVec::new(),
+            data6: arrayvec::ArrayVec::new(),
+            data7: arrayvec::ArrayVec::new(),
+            data8: arrayvec::ArrayVec::new(),
+            data9: arrayvec::ArrayVec::new(),
         }
+    }
+
+    fn push(&mut self, val: f64) {
+        self.data0.push(val);
+    }
+
+    fn lookup(&self, x: f64, zoom: f64) -> Option<f64> {
+
+        self.data0.get((x as i32 % 4096) as usize).map(|p| *p)
+
+    }
+}
+
+trait Lookup {
+    fn lookup(&self, x: f64, zoom: f64) -> Option<f64>;
+}
+
+impl Lookup for [Block] {
+
+    fn lookup(&self, x: f64, zoom: f64) -> Option<f64> {
+
+        self.get((x as i32 / 4096) as usize).and_then(|block| block.lookup(x, zoom))
     }
 }
 
@@ -116,6 +156,8 @@ struct State {
     last_mouse_state: MouseState,
 
     quit: bool,
+
+    scroll_factor: f64,
 }
 
 impl State {
@@ -129,21 +171,9 @@ impl State {
             mouse_state: MouseState::new(),
             last_mouse_state: MouseState::new(),
             quit: false,
+            scroll_factor: 0.0,
         }
     }
-}
-
-#[cfg(windows)]
-fn detect_mouse_button_release_outside_window(state: &mut State) {
-    use winapi::um::winuser::GetAsyncKeyState;
-
-    state.mouse_state.pressed.0 &= unsafe { GetAsyncKeyState(1) as u16 & 0b1000_0000_0000_0000 > 0 };
-    state.mouse_state.pressed.1 &= unsafe { GetAsyncKeyState(2) as u16 & 0b1000_0000_0000_0000 > 0 };
-    state.mouse_state.pressed.2 &= unsafe { GetAsyncKeyState(4) as u16 & 0b1000_0000_0000_0000 > 0 };
-}
-
-#[cfg(not(windows))]
-fn detect_mouse_button_release_outside_window(_state: &mut State) {
 }
 
 fn open_file(path: &str, state: &mut State) {
@@ -171,17 +201,17 @@ fn open_file(path: &str, state: &mut State) {
                         if let Ok(line) = maybe_line {
                             if let Ok(val) = line.parse::<f64>() {
 
-                                if block.data.is_full() {
+                                if block.data0.is_full() {
                                     blocks.lock().unwrap().push(block);
                                     block = Block::new();
                                 }
 
-                                block.data.push(val);
+                                block.push(val);
                             }
                         }
                     }
 
-                    if block.data.len() != 0 {
+                    if block.data0.len() != 0 {
                         blocks.lock().unwrap().push(block);
                     }
             }
@@ -203,6 +233,8 @@ fn run(ui: &Ui, state: &mut State) {
         state.pan.0 += state.last_mouse_state.pos.0 as f32 - state.mouse_state.pos.0 as f32;
         state.pan.1 += state.last_mouse_state.pos.1 as f32 - state.mouse_state.pos.1 as f32;
     }
+
+    state.scroll_factor -= state.mouse_state.wheel as f64 / 10.0;
 
     ui.window(im_str!("Main"))
         .size(ui.imgui().display_size(), ImGuiCond::Always)
@@ -255,6 +287,10 @@ fn run(ui: &Ui, state: &mut State) {
 
                 let width = ui.imgui().display_size().0 as i32;
 
+                let zoom = f64::exp(state.scroll_factor);
+
+                ui.text(im_str!("Zoom {:?}", zoom));
+
                 {
                     let capacity = state.data.points.capacity();
                     state.data.points.clear();
@@ -263,17 +299,14 @@ fn run(ui: &Ui, state: &mut State) {
 
                 for x in 0..width {
 
-                    let x_lookup = x + state.pan.0 as i32;
+                    let x_lookup = zoom*(x as f64 + state.pan.0 as f64);
 
-                    if let Some(block) = blocks.get((x / 4096) as usize) {
-
-                        if let Some(value) = block.data.get((x_lookup % 4096) as usize) {
+                        if let Some(value) = blocks.lookup(x_lookup, zoom) {
 
                             state.data.points.push(ImVec2::new(
                                 x as f32,
-                                (400.0 + 5.0*value) as f32 - state.pan.1 as f32));
+                                (400.0 + 10.0*value) as f32 - state.pan.1 as f32));
                         }
-                    }
                 }
 
                 d.add_poly_line(
@@ -288,6 +321,19 @@ fn run(ui: &Ui, state: &mut State) {
 
             ui.text(im_str!("{:#?}", state));
         });
+}
+
+#[cfg(windows)]
+fn detect_mouse_button_release_outside_window(state: &mut State) {
+    use winapi::um::winuser::GetAsyncKeyState;
+
+    state.mouse_state.pressed.0 &= unsafe { GetAsyncKeyState(1) as u16 & 0b1000_0000_0000_0000 > 0 };
+    state.mouse_state.pressed.1 &= unsafe { GetAsyncKeyState(2) as u16 & 0b1000_0000_0000_0000 > 0 };
+    state.mouse_state.pressed.2 &= unsafe { GetAsyncKeyState(4) as u16 & 0b1000_0000_0000_0000 > 0 };
+}
+
+#[cfg(not(windows))]
+fn detect_mouse_button_release_outside_window(_state: &mut State) {
 }
 
 fn main() {
