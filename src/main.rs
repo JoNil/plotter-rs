@@ -144,11 +144,12 @@ impl fmt::Debug for Data {
 struct State {
 
     loading: Arc<AtomicBool>,
+    stop_loading: Arc<AtomicBool>,
     loading_thread: Option<thread::JoinHandle<()>>,
 
     data: Data,
 
-    pan: (f32, f32),
+    pan: (f64, f64),
 
     frame_timer: timer::Timer,
 
@@ -157,13 +158,14 @@ struct State {
 
     quit: bool,
 
-    scroll_factor: f32,
+    scroll_factor: f64,
 }
 
 impl State {
     fn new() -> State {
         State {
             loading: Arc::new(AtomicBool::new(false)),
+            stop_loading: Arc::new(AtomicBool::new(false)),
             loading_thread: None,
             data: Data::new(),
             pan: (0.0, 0.0),
@@ -180,10 +182,13 @@ fn open_file(path: &str, state: &mut State) {
 
     if !state.loading.compare_and_swap(false, true, Ordering::SeqCst) {
 
+        state.stop_loading.store(false, Ordering::SeqCst);
+
         state.data.blocks.lock().unwrap().clear();
 
         let blocks = state.data.blocks.clone();
         let loading = state.loading.clone();
+        let stop_loading = state.stop_loading.clone();
         let owned_path = path.to_owned();
 
         state.loading_thread = Some(thread::spawn(move || {
@@ -197,6 +202,10 @@ fn open_file(path: &str, state: &mut State) {
                     let mut block = Block::new();
 
                     for maybe_line in reader.lines() {
+
+                        if stop_loading.load(Ordering::SeqCst) { 
+                            break;
+                        }
 
                         if let Ok(line) = maybe_line {
                             if let Ok(val) = line.parse::<f64>() {
@@ -232,8 +241,24 @@ fn run(ui: &Ui, state: &mut State) {
     let view_size = ui.imgui().display_size();
 
     if state.mouse_state.pressed.0 {
-        state.pan.0 += state.last_mouse_state.pos.0 as f32 - state.mouse_state.pos.0 as f32;
-        state.pan.1 -= state.last_mouse_state.pos.1 as f32 - state.mouse_state.pos.1 as f32;
+        state.pan.0 += state.last_mouse_state.pos.0 as f64 - state.mouse_state.pos.0 as f64;
+        state.pan.1 -= state.last_mouse_state.pos.1 as f64 - state.mouse_state.pos.1 as f64;
+    }
+
+    if state.mouse_state.wheel != 0.0 {
+        let mouse_centered_x = state.mouse_state.pos.0 as f64 - view_size.0 as f64 / 2.0;
+
+        let new_scroll_factor = state.scroll_factor - state.mouse_state.wheel as f64 / 10.0;
+
+        let last_scale = f64::exp(state.scroll_factor);
+        let new_scale = f64::exp(new_scroll_factor);
+
+        let mouse_centered_last_scale_x = (state.pan.0 + mouse_centered_x) / last_scale;
+        let mouse_centered_scale_x = (state.pan.0 + mouse_centered_x) / new_scale;
+    
+        state.pan.0 -= (mouse_centered_last_scale_x - mouse_centered_scale_x) * last_scale;
+
+        state.scroll_factor = new_scroll_factor;
     }
 
     ui.window(im_str!("Main"))
@@ -271,40 +296,21 @@ fn run(ui: &Ui, state: &mut State) {
                     }
 
                     if ui.menu_item(im_str!("Close"))
-                        .enabled(!state.loading.load(Ordering::SeqCst) &&
-                            state.data.blocks.lock().unwrap().len() > 0)
+                        .enabled(state.data.blocks.lock().unwrap().len() > 0)
                         .build() {
 
                         state.pan = (0.0, 0.0);
+                        state.scroll_factor = 0.0;
+                        state.stop_loading.store(true, Ordering::SeqCst);
+
+                        while state.loading.load(Ordering::SeqCst) {
+                            thread::sleep(std::time::Duration::from_millis(1));
+                        }
+
                         state.data.blocks.lock().unwrap().clear();
                     }
                 });
             });
-
-            
-
-            let mouse_centered_x = state.mouse_state.pos.0 as f32 - view_size.0 as f32 / 2.0;
-            let mouse_centered_y = -state.mouse_state.pos.1 as f32 + view_size.1 as f32 / 2.0;
-
-            ui.text(im_str!("Mouse {:?}", (mouse_centered_x, mouse_centered_y)));
-
-            let new_scroll_factor = state.scroll_factor - state.mouse_state.wheel as f32 / 10.0;
-
-            let last_scale = f32::exp(state.scroll_factor);
-            let new_scale = f32::exp(new_scroll_factor);
-
-            let mouse_centered_last_scale_x = last_scale * mouse_centered_x;
-            let mouse_centered_last_scale_y = mouse_centered_y;
-
-            let mouse_centered_scale_x = new_scale * mouse_centered_x;
-            let mouse_centered_scale_y = mouse_centered_y;
-
-            if state.mouse_state.wheel != 0.0 {
-                //state.pan.0 -= mouse_centered_last_scale_x - mouse_centered_scale_x;
-                //state.pan.1 += mouse_centered_last_scale_y - mouse_centered_scale_y;
-
-                state.scroll_factor = new_scroll_factor;
-            }
 
             ui.with_window_draw_list(|d| {
 
@@ -322,14 +328,14 @@ fn run(ui: &Ui, state: &mut State) {
 
                 for x in 0..(view_size.0 as i32) {
 
-                    let x_lookup = scale*(x as f64 + state.pan.0 as f64 - view_size.0 as f64 / 2.0);
+                    let x_lookup = scale*(x as f64 + state.pan.0 - view_size.0 as f64 / 2.0);
 
-                        if let Some(value) = blocks.lookup(x_lookup, scale) {
+                    if let Some(value) = blocks.lookup(x_lookup, scale) {
 
-                            state.data.points.push(ImVec2::new(
-                                x as f32,
-                                10.0*value as f32 + state.pan.1 as f32 + view_size.1 as f32 / 2.0));
-                        }
+                        state.data.points.push(ImVec2::new(
+                            x as f32,
+                            (10.0*value + state.pan.1 + view_size.1 as f64 / 2.0) as f32));
+                    }
                 }
 
                 d.add_poly_line(
