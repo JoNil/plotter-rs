@@ -157,7 +157,7 @@ struct State {
 
     quit: bool,
 
-    scroll_factor: f64,
+    scroll_factor: f32,
 }
 
 impl State {
@@ -229,12 +229,12 @@ fn save_file(path: &str, state: &State) {
 
 fn run(ui: &Ui, state: &mut State) {
 
+    let view_size = ui.imgui().display_size();
+
     if state.mouse_state.pressed.0 {
         state.pan.0 += state.last_mouse_state.pos.0 as f32 - state.mouse_state.pos.0 as f32;
-        state.pan.1 += state.last_mouse_state.pos.1 as f32 - state.mouse_state.pos.1 as f32;
+        state.pan.1 -= state.last_mouse_state.pos.1 as f32 - state.mouse_state.pos.1 as f32;
     }
-
-    state.scroll_factor -= state.mouse_state.wheel as f64 / 10.0;
 
     ui.window(im_str!("Main"))
         .size(ui.imgui().display_size(), ImGuiCond::Always)
@@ -281,40 +281,63 @@ fn run(ui: &Ui, state: &mut State) {
                 });
             });
 
+            
+
+            let mouse_centered_x = state.mouse_state.pos.0 as f32 - view_size.0 as f32 / 2.0;
+            let mouse_centered_y = -state.mouse_state.pos.1 as f32 + view_size.1 as f32 / 2.0;
+
+            ui.text(im_str!("Mouse {:?}", (mouse_centered_x, mouse_centered_y)));
+
+            let new_scroll_factor = state.scroll_factor - state.mouse_state.wheel as f32 / 10.0;
+
+            let last_scale = f32::exp(state.scroll_factor);
+            let new_scale = f32::exp(new_scroll_factor);
+
+            let mouse_centered_last_scale_x = last_scale * mouse_centered_x;
+            let mouse_centered_last_scale_y = mouse_centered_y;
+
+            let mouse_centered_scale_x = new_scale * mouse_centered_x;
+            let mouse_centered_scale_y = mouse_centered_y;
+
+            if state.mouse_state.wheel != 0.0 {
+                //state.pan.0 -= mouse_centered_last_scale_x - mouse_centered_scale_x;
+                //state.pan.1 += mouse_centered_last_scale_y - mouse_centered_scale_y;
+
+                state.scroll_factor = new_scroll_factor;
+            }
+
             ui.with_window_draw_list(|d| {
 
                 let blocks = state.data.blocks.lock().unwrap();
 
-                let width = ui.imgui().display_size().0 as i32;
+                let scale = f64::exp(state.scroll_factor as f64);
 
-                let zoom = f64::exp(state.scroll_factor);
-
-                ui.text(im_str!("Zoom {:?}", zoom));
+                ui.text(im_str!("Zoom {:?}", scale));
 
                 {
                     let capacity = state.data.points.capacity();
                     state.data.points.clear();
-                    state.data.points.reserve_exact(max(capacity as i32 - width, 0) as usize);
+                    state.data.points.reserve_exact(max(capacity as i32 - view_size.0 as i32, 0) as usize);
                 }
 
-                for x in 0..width {
+                for x in 0..(view_size.0 as i32) {
 
-                    let x_lookup = zoom*(x as f64 + state.pan.0 as f64);
+                    let x_lookup = scale*(x as f64 + state.pan.0 as f64 - view_size.0 as f64 / 2.0);
 
-                        if let Some(value) = blocks.lookup(x_lookup, zoom) {
+                        if let Some(value) = blocks.lookup(x_lookup, scale) {
 
                             state.data.points.push(ImVec2::new(
                                 x as f32,
-                                (400.0 + 10.0*value) as f32 - state.pan.1 as f32));
+                                10.0*value as f32 + state.pan.1 as f32 + view_size.1 as f32 / 2.0));
                         }
                 }
 
                 d.add_poly_line(
-                            &state.data.points,
-                            0xdf00dfff,
-                            false,
-                            1.0,
-                            true);
+                    &state.data.points,
+                    0xdf00dfff,
+                    false,
+                    1.0,
+                    true);
             });
 
             ui.text(im_str!("Fps: {:.1} {:.2} ms", ui.framerate(), 1000.0 / ui.framerate()));
