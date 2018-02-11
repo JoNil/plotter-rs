@@ -52,31 +52,31 @@ use std::thread;
 mod timer;
 
 struct Block {
-    data0: arrayvec::ArrayVec<[f64; 4096]>,
-    data1: arrayvec::ArrayVec<[f64; 2048]>,
-    data2: arrayvec::ArrayVec<[f64; 1024]>,
-    data3: arrayvec::ArrayVec<[f64; 512]>,
-    data4: arrayvec::ArrayVec<[f64; 256]>,
-    data5: arrayvec::ArrayVec<[f64; 128]>,
-    data6: arrayvec::ArrayVec<[f64; 64]>,
-    data7: arrayvec::ArrayVec<[f64; 32]>,
-    data8: arrayvec::ArrayVec<[f64; 16]>,
-    data9: arrayvec::ArrayVec<[f64; 8]>,
+    data0: arrayvec::ArrayVec<[f64; 65536]>,
+    //data1: arrayvec::ArrayVec<[f64; 2048]>,
+    //data2: arrayvec::ArrayVec<[f64; 1024]>,
+    //data3: arrayvec::ArrayVec<[f64; 512]>,
+    //data4: arrayvec::ArrayVec<[f64; 256]>,
+    //data5: arrayvec::ArrayVec<[f64; 128]>,
+    //data6: arrayvec::ArrayVec<[f64; 64]>,
+    //data7: arrayvec::ArrayVec<[f64; 32]>,
+    //data8: arrayvec::ArrayVec<[f64; 16]>,
+    //data9: arrayvec::ArrayVec<[f64; 8]>,
 }
 
 impl Block {
     fn new() -> Block {
         Block {
             data0: arrayvec::ArrayVec::new(),
-            data1: arrayvec::ArrayVec::new(),
-            data2: arrayvec::ArrayVec::new(),
-            data3: arrayvec::ArrayVec::new(),
-            data4: arrayvec::ArrayVec::new(),
-            data5: arrayvec::ArrayVec::new(),
-            data6: arrayvec::ArrayVec::new(),
-            data7: arrayvec::ArrayVec::new(),
-            data8: arrayvec::ArrayVec::new(),
-            data9: arrayvec::ArrayVec::new(),
+            //data1: arrayvec::ArrayVec::new(),
+            //data2: arrayvec::ArrayVec::new(),
+            //data3: arrayvec::ArrayVec::new(),
+            //data4: arrayvec::ArrayVec::new(),
+            //data5: arrayvec::ArrayVec::new(),
+            //data6: arrayvec::ArrayVec::new(),
+            //data7: arrayvec::ArrayVec::new(),
+            //data8: arrayvec::ArrayVec::new(),
+            //data9: arrayvec::ArrayVec::new(),
         }
     }
 
@@ -86,7 +86,7 @@ impl Block {
 
     fn lookup(&self, x: f64, zoom: f64) -> Option<f64> {
 
-        self.data0.get((x as i32 % 4096) as usize).map(|p| *p)
+        self.data0.get((x as i32 % 65536) as usize).map(|p| *p)
 
     }
 }
@@ -95,11 +95,11 @@ trait Lookup {
     fn lookup(&self, x: f64, zoom: f64) -> Option<f64>;
 }
 
-impl Lookup for [Block] {
+impl Lookup for [Box<Block>] {
 
     fn lookup(&self, x: f64, zoom: f64) -> Option<f64> {
 
-        self.get((x as i32 / 4096) as usize).and_then(|block| block.lookup(x, zoom))
+        self.get((x as i32 / 65536) as usize).and_then(|block| block.lookup(x, zoom))
     }
 }
 
@@ -121,7 +121,7 @@ impl MouseState {
 }
 
 struct Data {
-    blocks: Arc<Mutex<Vec<Block>>>,
+    blocks: Arc<Mutex<Vec<Box<Block>>>>,
     points: Vec<ImVec2>,
 }
 
@@ -201,7 +201,7 @@ fn open_file(path: &str, state: &mut State) {
 
                 let reader = BufReader::new(&file);
 
-                    let mut block = Block::new();
+                    let mut block = Box::new(Block::new());
 
                     for maybe_line in reader.lines() {
 
@@ -214,7 +214,7 @@ fn open_file(path: &str, state: &mut State) {
 
                                 if block.data0.is_full() {
                                     blocks.lock().unwrap().push(block);
-                                    block = Block::new();
+                                    block = Box::new(Block::new());
                                 }
 
                                 block.push(val);
