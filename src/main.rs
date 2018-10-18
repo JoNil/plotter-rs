@@ -1,4 +1,5 @@
 extern crate arrayvec;
+extern crate serialport;
 
 extern crate glium;
 
@@ -13,7 +14,6 @@ extern crate time;
 #[cfg(windows)]
 extern crate winapi;
 
-// Use https://github.com/tafia/quick-csv for csv
 
 use imgui::{
     ImGui,
@@ -43,40 +43,22 @@ use glium::{
 use std::cmp::max;
 use std::fmt;
 use std::fs::File;
-use std::io::BufRead;
-use std::io::BufReader;
+use std::io::{BufReader, BufRead, ErrorKind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 mod timer;
 
 struct Block {
-    data0: arrayvec::ArrayVec<[f64; 65536]>,
-    //data1: arrayvec::ArrayVec<[f64; 2048]>,
-    //data2: arrayvec::ArrayVec<[f64; 1024]>,
-    //data3: arrayvec::ArrayVec<[f64; 512]>,
-    //data4: arrayvec::ArrayVec<[f64; 256]>,
-    //data5: arrayvec::ArrayVec<[f64; 128]>,
-    //data6: arrayvec::ArrayVec<[f64; 64]>,
-    //data7: arrayvec::ArrayVec<[f64; 32]>,
-    //data8: arrayvec::ArrayVec<[f64; 16]>,
-    //data9: arrayvec::ArrayVec<[f64; 8]>,
+    data0: arrayvec::ArrayVec<[f64; 16]>,
 }
 
 impl Block {
     fn new() -> Block {
         Block {
             data0: arrayvec::ArrayVec::new(),
-            //data1: arrayvec::ArrayVec::new(),
-            //data2: arrayvec::ArrayVec::new(),
-            //data3: arrayvec::ArrayVec::new(),
-            //data4: arrayvec::ArrayVec::new(),
-            //data5: arrayvec::ArrayVec::new(),
-            //data6: arrayvec::ArrayVec::new(),
-            //data7: arrayvec::ArrayVec::new(),
-            //data8: arrayvec::ArrayVec::new(),
-            //data9: arrayvec::ArrayVec::new(),
         }
     }
 
@@ -84,9 +66,9 @@ impl Block {
         self.data0.push(val);
     }
 
-    fn lookup(&self, x: f64, zoom: f64) -> Option<f64> {
+    fn lookup(&self, x: f64, _zoom: f64) -> Option<f64> {
 
-        self.data0.get((x as i32 % 65536) as usize).map(|p| *p)
+        self.data0.get((x as i32 % 16) as usize).map(|p| *p)
 
     }
 }
@@ -99,7 +81,7 @@ impl Lookup for [Box<Block>] {
 
     fn lookup(&self, x: f64, zoom: f64) -> Option<f64> {
 
-        self.get((x as i32 / 65536) as usize).and_then(|block| block.lookup(x, zoom))
+        self.get((x as i32 / 16) as usize).and_then(|block| block.lookup(x, zoom))
     }
 }
 
@@ -234,8 +216,84 @@ fn open_file(path: &str, state: &mut State) {
     }
 }
 
-fn save_file(path: &str, state: &State) {
+fn open_com_port(state: &mut State) {
 
+    if !state.loading.compare_and_swap(false, true, Ordering::SeqCst) {
+
+        state.stop_loading.store(false, Ordering::SeqCst);
+
+        state.data.blocks.lock().unwrap().clear();
+
+        let blocks = state.data.blocks.clone();
+        let loading = state.loading.clone();
+        let stop_loading = state.stop_loading.clone();
+
+        state.loading_thread = Some(thread::spawn(move || {
+
+            let s = serialport::SerialPortSettings {
+                baud_rate: 250000,
+                data_bits: serialport::DataBits::Eight,
+                flow_control: serialport::FlowControl::None,
+                parity: serialport::Parity::None,
+                stop_bits: serialport::StopBits::One,
+                timeout: Duration::from_millis(1),
+            };
+
+            let sp = {
+                let mut sp = None;
+
+                for i in 1..=9 {
+                    let port = format!("COM{}", i);
+
+                    match serialport::open_with_settings(&port, &s) {
+                        Ok(s) => {
+                            println!("Using {}", port);
+                            sp = Some(s);
+                            break;
+                        }
+                        Err(_) => {}
+                    }
+                }
+
+                if let Some(s) = sp {
+                    s
+                } else {
+                    loading.store(false, Ordering::SeqCst);
+                    return;
+                }
+            };
+
+            let mut reader = BufReader::new(sp);
+
+            let mut block = Box::new(Block::new());
+
+            while !stop_loading.load(Ordering::SeqCst) {
+                
+                let mut got_line = false;
+                let mut line = String::new();
+
+                match reader.read_line(&mut line) {
+                    Ok(_) => { got_line = true; },
+                    Err(ref e) if e.kind() == ErrorKind::TimedOut => (),
+                    Err(e) => { println!("{:?}", e) },
+                }
+
+                if got_line {
+                    if let Ok(val) = line.trim().parse::<f64>() {
+
+                        if block.data0.is_full() {
+                            blocks.lock().unwrap().push(block);
+                            block = Box::new(Block::new());
+                        }
+
+                        println!("{}", val);
+
+                        block.push(val / 1000.0);
+                    }
+                }
+            }
+        }));
+    }
 }
 
 fn run(ui: &Ui, state: &mut State) {
@@ -286,19 +344,16 @@ fn run(ui: &Ui, state: &mut State) {
                             open_file(&path, state);
                         }
                     }
-                    if ui.menu_item(im_str!("Save"))
+
+                    if ui.menu_item(im_str!("Open COM port"))
                         .enabled(!state.loading.load(Ordering::SeqCst))
                         .build() {
 
-                        if let Ok(nfd::Response::Okay(path)) =
-                            nfd::open_save_dialog(Some("txt"), None) {
-                                
-                            save_file(&path, state);
-                        }
+                        open_com_port(state);
                     }
 
                     if ui.menu_item(im_str!("Close"))
-                        .enabled(state.data.blocks.lock().unwrap().len() > 0)
+                        .enabled(state.loading.load(Ordering::SeqCst))
                         .build() {
 
                         state.pan = (0.0, 0.0);
