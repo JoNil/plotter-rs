@@ -52,7 +52,7 @@ use std::time::Duration;
 mod timer;
 
 struct Block {
-    data0: arrayvec::ArrayVec<[f64; 16]>,
+    data0: arrayvec::ArrayVec<[f64; 32]>,
 }
 
 impl Block {
@@ -68,7 +68,7 @@ impl Block {
 
     fn lookup(&self, x: f64, _zoom: f64) -> Option<f64> {
 
-        self.data0.get((x as i32 % 16) as usize).map(|p| *p)
+        self.data0.get((x as i32 % 32) as usize).map(|p| *p)
 
     }
 }
@@ -81,7 +81,7 @@ impl Lookup for [Box<Block>] {
 
     fn lookup(&self, x: f64, zoom: f64) -> Option<f64> {
 
-        self.get((x as i32 / 16) as usize).and_then(|block| block.lookup(x, zoom))
+        self.get((x as i32 / 32) as usize).and_then(|block| block.lookup(x, zoom))
     }
 }
 
@@ -286,9 +286,7 @@ fn open_com_port(state: &mut State) {
                             block = Box::new(Block::new());
                         }
 
-                        println!("{}", val);
-
-                        block.push(val / 1000.0);
+                        block.push(val / 10.0);
                     }
                 }
             }
@@ -536,7 +534,9 @@ fn main() {
                             }
                         },
                         WindowEvent::CursorMoved { position: (x, y), .. } => {
-                            new_absolute_mouse_pos = Some((x as i32, y as i32));
+                            if x as i32 != 0 && y as i32 != 0 {
+                                new_absolute_mouse_pos = Some((x as i32, y as i32));
+                            }
                         },
                         WindowEvent::MouseInput { state, button, .. } => {
                             match button {
