@@ -5,6 +5,7 @@ authors = ["Jonathan Nilsson"]
 
 [dependencies]
 arrayvec = "0.4.7"
+byteorder = "1"
 glium = "0.20"
 glutin = "0.12"
 imgui = { path = "../imgui-rs" }

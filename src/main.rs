@@ -1,30 +1,24 @@
 extern crate arrayvec;
-extern crate serialport;
-
+extern crate byteorder;
 extern crate glium;
+extern crate nfd;
+extern crate serialport;
+extern crate time;
 
 #[macro_use]
 extern crate imgui;
 extern crate imgui_glium_renderer;
 
-extern crate nfd;
-
-extern crate time;
-
 #[cfg(windows)]
 extern crate winapi;
-
 
 use imgui::{
     ImGui,
     ImGuiCond,
     ImGuiKey,
     ImVec2,
-    Ui,
-};
-
+    Ui};
 use imgui_glium_renderer::Renderer;
-
 use glium::glutin::{
     Api,
     ContextBuilder,
@@ -32,14 +26,11 @@ use glium::glutin::{
     GlContext,
     GlProfile,
     GlRequest,
-    WindowBuilder,
-};
-
+    WindowBuilder};
 use glium::{
     Display,
-    Surface,
-};
-
+    Surface};
+use byteorder::{LittleEndian, ReadBytesExt};
 use std::cmp::max;
 use std::fmt;
 use std::fs::File;
@@ -269,24 +260,35 @@ fn open_com_port(state: &mut State) {
 
             while !stop_loading.load(Ordering::SeqCst) {
                 
-                let mut got_line = false;
-                let mut line = String::new();
+                let mut value = 0;
 
-                match reader.read_line(&mut line) {
-                    Ok(_) => { got_line = true; },
+                match reader.read_u16::<LittleEndian>() {
+                    Ok(v) => { value = v; },
                     Err(ref e) if e.kind() == ErrorKind::TimedOut => (),
                     Err(e) => { println!("{:?}", e) },
                 }
 
-                if got_line {
-                    if let Ok(val) = line.trim().parse::<f64>() {
+                if value != 0 {
+
+                    let sync     = (value >> 15) & 0b1;
+                    let light_on = (value >> 14) & 0b1;
+
+                    let high = (value >> 8) & 0b00011111;
+                    let low =  value        & 0b00011111;
+
+                    let analog = (high << 5) | low;
+
+                    if sync != 0b1 {
+                        reader.read_u8().ok();
+
+                    } else {
 
                         if block.data0.is_full() {
                             blocks.lock().unwrap().push(block);
                             block = Box::new(Block::new());
                         }
 
-                        block.push(val / 10.0);
+                        block.push(analog as f64 / 10.0);
                     }
                 }
             }
