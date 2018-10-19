@@ -12,29 +12,17 @@ extern crate imgui_glium_renderer;
 #[cfg(windows)]
 extern crate winapi;
 
-use imgui::{
-    ImGui,
-    ImGuiCond,
-    ImGuiKey,
-    ImVec2,
-    Ui};
-use imgui_glium_renderer::Renderer;
-use glium::glutin::{
-    Api,
-    ContextBuilder,
-    EventsLoop,
-    GlContext,
-    GlProfile,
-    GlRequest,
-    WindowBuilder};
-use glium::{
-    Display,
-    Surface};
 use byteorder::{LittleEndian, ReadBytesExt};
+use glium::glutin::{
+    Api, ContextBuilder, EventsLoop, GlContext, GlProfile, GlRequest, WindowBuilder,
+};
+use glium::{Display, Surface};
+use imgui::{ImGui, ImGuiCond, ImGuiKey, ImVec2, Ui};
+use imgui_glium_renderer::Renderer;
 use std::cmp::max;
 use std::fmt;
 use std::fs::File;
-use std::io::{BufReader, BufRead, ErrorKind};
+use std::io::{BufRead, BufReader, ErrorKind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -58,9 +46,7 @@ impl Block {
     }
 
     fn lookup(&self, x: f64, _zoom: f64) -> Option<f64> {
-
         self.data0.get((x as i32 % 32) as usize).map(|p| *p)
-
     }
 }
 
@@ -69,10 +55,9 @@ trait Lookup {
 }
 
 impl Lookup for [Box<Block>] {
-
     fn lookup(&self, x: f64, zoom: f64) -> Option<f64> {
-
-        self.get((x as i32 / 32) as usize).and_then(|block| block.lookup(x, zoom))
+        self.get((x as i32 / 32) as usize)
+            .and_then(|block| block.lookup(x, zoom))
     }
 }
 
@@ -94,30 +79,38 @@ impl MouseState {
 }
 
 struct Data {
-    blocks: Arc<Mutex<Vec<Box<Block>>>>,
-    points: Vec<ImVec2>,
+    blocks_ch0: Arc<Mutex<Vec<Box<Block>>>>,
+    blocks_ch1: Arc<Mutex<Vec<Box<Block>>>>,
+    points_ch0: Vec<ImVec2>,
+    points_ch1: Vec<ImVec2>,
 }
 
 impl Data {
     fn new() -> Data {
         Data {
-            blocks: Arc::new(Mutex::new(Vec::new())),
-            points: Vec::new(),
+            blocks_ch0: Arc::new(Mutex::new(Vec::new())),
+            blocks_ch1: Arc::new(Mutex::new(Vec::new())),
+            points_ch0: Vec::new(),
+            points_ch1: Vec::new(),
         }
     }
 }
 
 impl fmt::Debug for Data {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Data {{ blocks: {}: points: {} }}",
-            self.blocks.lock().unwrap().len(),
-            self.points.len())
+        write!(
+            f,
+            "Data {{ blocks_ch0: {}, blocks_ch1: {}, points_ch0: {}, points_ch1: {} }}",
+            self.blocks_ch0.lock().unwrap().len(),
+            self.blocks_ch1.lock().unwrap().len(),
+            self.points_ch0.len(),
+            self.points_ch1.len()
+        )
     }
 }
 
 #[derive(Debug)]
 struct State {
-
     loading: Arc<AtomicBool>,
     stop_loading: Arc<AtomicBool>,
     loading_thread: Option<thread::JoinHandle<()>>,
@@ -154,50 +147,47 @@ impl State {
 }
 
 fn open_file(path: &str, state: &mut State) {
-
-    if !state.loading.compare_and_swap(false, true, Ordering::SeqCst) {
-
+    if !state
+        .loading
+        .compare_and_swap(false, true, Ordering::SeqCst)
+    {
         state.stop_loading.store(false, Ordering::SeqCst);
 
-        state.data.blocks.lock().unwrap().clear();
+        state.data.blocks_ch0.lock().unwrap().clear();
 
-        let blocks = state.data.blocks.clone();
+        let blocks = state.data.blocks_ch0.clone();
         let loading = state.loading.clone();
         let stop_loading = state.stop_loading.clone();
         let owned_path = path.to_owned();
 
         state.loading_thread = Some(thread::spawn(move || {
-
             let mut t = timer::Timer::new();
 
             if let Ok(file) = File::open(&owned_path) {
-
                 let reader = BufReader::new(&file);
 
-                    let mut block = Box::new(Block::new());
+                let mut block = Box::new(Block::new());
 
-                    for maybe_line in reader.lines() {
+                for maybe_line in reader.lines() {
+                    if stop_loading.load(Ordering::SeqCst) {
+                        break;
+                    }
 
-                        if stop_loading.load(Ordering::SeqCst) { 
-                            break;
-                        }
-
-                        if let Ok(line) = maybe_line {
-                            if let Ok(val) = line.parse::<f64>() {
-
-                                if block.data0.is_full() {
-                                    blocks.lock().unwrap().push(block);
-                                    block = Box::new(Block::new());
-                                }
-
-                                block.push(val);
+                    if let Ok(line) = maybe_line {
+                        if let Ok(val) = line.parse::<f64>() {
+                            if block.data0.is_full() {
+                                blocks.lock().unwrap().push(block);
+                                block = Box::new(Block::new());
                             }
+
+                            block.push(val);
                         }
                     }
+                }
 
-                    if block.data0.len() != 0 {
-                        blocks.lock().unwrap().push(block);
-                    }
+                if block.data0.len() != 0 {
+                    blocks.lock().unwrap().push(block);
+                }
             }
 
             println!("Load time: {}", t.reset());
@@ -208,19 +198,21 @@ fn open_file(path: &str, state: &mut State) {
 }
 
 fn open_com_port(state: &mut State) {
-
-    if !state.loading.compare_and_swap(false, true, Ordering::SeqCst) {
-
+    if !state
+        .loading
+        .compare_and_swap(false, true, Ordering::SeqCst)
+    {
         state.stop_loading.store(false, Ordering::SeqCst);
 
-        state.data.blocks.lock().unwrap().clear();
+        state.data.blocks_ch0.lock().unwrap().clear();
+        state.data.blocks_ch1.lock().unwrap().clear();
 
-        let blocks = state.data.blocks.clone();
+        let blocks_ch0 = state.data.blocks_ch0.clone();
+        let blocks_ch1 = state.data.blocks_ch1.clone();
         let loading = state.loading.clone();
         let stop_loading = state.stop_loading.clone();
 
         state.loading_thread = Some(thread::spawn(move || {
-
             let s = serialport::SerialPortSettings {
                 baud_rate: 250000,
                 data_bits: serialport::DataBits::Eight,
@@ -256,39 +248,44 @@ fn open_com_port(state: &mut State) {
 
             let mut reader = BufReader::new(sp);
 
-            let mut block = Box::new(Block::new());
+            let mut block_ch0 = Box::new(Block::new());
+            let mut block_ch1 = Box::new(Block::new());
 
             while !stop_loading.load(Ordering::SeqCst) {
-                
                 let mut value = 0;
 
                 match reader.read_u16::<LittleEndian>() {
-                    Ok(v) => { value = v; },
+                    Ok(v) => {
+                        value = v;
+                    }
                     Err(ref e) if e.kind() == ErrorKind::TimedOut => (),
-                    Err(e) => { println!("{:?}", e) },
+                    Err(e) => println!("{:?}", e),
                 }
 
                 if value != 0 {
-
-                    let sync     = (value >> 15) & 0b1;
+                    let sync = (value >> 15) & 0b1;
                     let light_on = (value >> 14) & 0b1;
 
                     let high = (value >> 8) & 0b00011111;
-                    let low =  value        & 0b00011111;
+                    let low = value & 0b00011111;
 
                     let analog = (high << 5) | low;
 
                     if sync != 0b1 {
                         reader.read_u8().ok();
-
                     } else {
-
-                        if block.data0.is_full() {
-                            blocks.lock().unwrap().push(block);
-                            block = Box::new(Block::new());
+                        if block_ch0.data0.is_full() {
+                            blocks_ch0.lock().unwrap().push(block_ch0);
+                            block_ch0 = Box::new(Block::new());
                         }
 
-                        block.push(analog as f64 / 10.0);
+                        if block_ch1.data0.is_full() {
+                            blocks_ch1.lock().unwrap().push(block_ch1);
+                            block_ch1 = Box::new(Block::new());
+                        }
+
+                        block_ch0.push(analog as f64 / 10.0);
+                        block_ch1.push(if light_on == 0b1 { 80.0 } else { 100.0 });
                     }
                 }
             }
@@ -297,7 +294,6 @@ fn open_com_port(state: &mut State) {
 }
 
 fn run(ui: &Ui, state: &mut State) {
-
     let view_size = ui.imgui().display_size();
 
     if state.mouse_state.pressed.0 {
@@ -315,7 +311,7 @@ fn run(ui: &Ui, state: &mut State) {
 
         let mouse_centered_last_scale_x = (state.pan.0 + mouse_centered_x) / last_scale;
         let mouse_centered_scale_x = (state.pan.0 + mouse_centered_x) / new_scale;
-    
+
         state.pan.0 -= (mouse_centered_last_scale_x - mouse_centered_scale_x) * last_scale;
 
         state.scroll_factor = new_scroll_factor;
@@ -330,32 +326,34 @@ fn run(ui: &Ui, state: &mut State) {
         .collapsible(false)
         .menu_bar(true)
         .build(|| {
-
             ui.menu_bar(|| {
                 ui.menu(im_str!("File")).build(|| {
-                    if ui.menu_item(im_str!("Open"))
+                    if ui
+                        .menu_item(im_str!("Open"))
                         .enabled(!state.loading.load(Ordering::SeqCst))
-                        .build() {
-
+                        .build()
+                    {
                         if let Ok(nfd::Response::Okay(path)) =
-                            nfd::open_file_dialog(Some("txt"), None) {
-
+                            nfd::open_file_dialog(Some("txt"), None)
+                        {
                             state.pan = (0.0, 0.0);
                             open_file(&path, state);
                         }
                     }
 
-                    if ui.menu_item(im_str!("Open COM port"))
+                    if ui
+                        .menu_item(im_str!("Open COM port"))
                         .enabled(!state.loading.load(Ordering::SeqCst))
-                        .build() {
-
+                        .build()
+                    {
                         open_com_port(state);
                     }
 
-                    if ui.menu_item(im_str!("Close"))
+                    if ui
+                        .menu_item(im_str!("Close"))
                         .enabled(state.loading.load(Ordering::SeqCst))
-                        .build() {
-
+                        .build()
+                    {
                         state.pan = (0.0, 0.0);
                         state.scroll_factor = 0.0;
                         state.stop_loading.store(true, Ordering::SeqCst);
@@ -364,46 +362,75 @@ fn run(ui: &Ui, state: &mut State) {
                             thread::sleep(std::time::Duration::from_millis(1));
                         }
 
-                        state.data.blocks.lock().unwrap().clear();
+                        state.data.blocks_ch0.lock().unwrap().clear();
+                        state.data.blocks_ch1.lock().unwrap().clear();
                     }
                 });
             });
 
             ui.with_window_draw_list(|d| {
-
-                let blocks = state.data.blocks.lock().unwrap();
-
                 let scale = f64::exp(state.scroll_factor as f64);
 
                 ui.text(im_str!("Zoom {:?}", scale));
 
                 {
-                    let capacity = state.data.points.capacity();
-                    state.data.points.clear();
-                    state.data.points.reserve_exact(max(capacity as i32 - view_size.0 as i32, 0) as usize);
-                }
+                    let blocks_ch0 = state.data.blocks_ch0.lock().unwrap();
 
-                for x in 0..(view_size.0 as i32) {
-
-                    let x_lookup = scale*(x as f64 + state.pan.0 - view_size.0 as f64 / 2.0);
-
-                    if let Some(value) = blocks.lookup(x_lookup, scale) {
-
-                        state.data.points.push(ImVec2::new(
-                            x as f32,
-                            (10.0*value + state.pan.1 + view_size.1 as f64 / 2.0) as f32));
+                    {
+                        let capacity = state.data.points_ch0.capacity();
+                        state.data.points_ch0.clear();
+                        state
+                            .data
+                            .points_ch0
+                            .reserve_exact(max(capacity as i32 - view_size.0 as i32, 0) as usize);
                     }
+
+                    for x in 0..(view_size.0 as i32) {
+                        let x_lookup = scale * (x as f64 + state.pan.0 - view_size.0 as f64 / 2.0);
+
+                        if let Some(value) = blocks_ch0.lookup(x_lookup, scale) {
+                            state.data.points_ch0.push(ImVec2::new(
+                                x as f32,
+                                (10.0 * value + state.pan.1 + view_size.1 as f64 / 2.0) as f32,
+                            ));
+                        }
+                    }
+
+                    d.add_poly_line(&state.data.points_ch0, 0xdf00dfff, false, 1.0, true);
                 }
 
-                d.add_poly_line(
-                    &state.data.points,
-                    0xdf00dfff,
-                    false,
-                    1.0,
-                    true);
+                {
+                    let blocks_ch1 = state.data.blocks_ch1.lock().unwrap();
+
+                    {
+                        let capacity = state.data.points_ch1.capacity();
+                        state.data.points_ch1.clear();
+                        state
+                            .data
+                            .points_ch1
+                            .reserve_exact(max(capacity as i32 - view_size.0 as i32, 0) as usize);
+                    }
+
+                    for x in 0..(view_size.0 as i32) {
+                        let x_lookup = scale * (x as f64 + state.pan.0 - view_size.0 as f64 / 2.0);
+
+                        if let Some(value) = blocks_ch1.lookup(x_lookup, scale) {
+                            state.data.points_ch1.push(ImVec2::new(
+                                x as f32,
+                                (10.0 * value + state.pan.1 + view_size.1 as f64 / 2.0) as f32,
+                            ));
+                        }
+                    }
+
+                    d.add_poly_line(&state.data.points_ch1, 0xdf1010ff, false, 1.0, true);
+                }
             });
 
-            ui.text(im_str!("Fps: {:.1} {:.2} ms", ui.framerate(), 1000.0 / ui.framerate()));
+            ui.text(im_str!(
+                "Fps: {:.1} {:.2} ms",
+                ui.framerate(),
+                1000.0 / ui.framerate()
+            ));
 
             ui.text(im_str!("{:#?}", state));
         });
@@ -413,14 +440,16 @@ fn run(ui: &Ui, state: &mut State) {
 fn detect_mouse_button_release_outside_window(state: &mut State) {
     use winapi::um::winuser::GetAsyncKeyState;
 
-    state.mouse_state.pressed.0 &= unsafe { GetAsyncKeyState(1) as u16 & 0b1000_0000_0000_0000 > 0 };
-    state.mouse_state.pressed.1 &= unsafe { GetAsyncKeyState(2) as u16 & 0b1000_0000_0000_0000 > 0 };
-    state.mouse_state.pressed.2 &= unsafe { GetAsyncKeyState(4) as u16 & 0b1000_0000_0000_0000 > 0 };
+    state.mouse_state.pressed.0 &=
+        unsafe { GetAsyncKeyState(1) as u16 & 0b1000_0000_0000_0000 > 0 };
+    state.mouse_state.pressed.1 &=
+        unsafe { GetAsyncKeyState(2) as u16 & 0b1000_0000_0000_0000 > 0 };
+    state.mouse_state.pressed.2 &=
+        unsafe { GetAsyncKeyState(4) as u16 & 0b1000_0000_0000_0000 > 0 };
 }
 
 #[cfg(not(windows))]
-fn detect_mouse_button_release_outside_window(_state: &mut State) {
-}
+fn detect_mouse_button_release_outside_window(_state: &mut State) {}
 
 fn main() {
     let mut events_loop = EventsLoop::new();
@@ -438,9 +467,8 @@ fn main() {
     let mut imgui = ImGui::init();
     imgui.set_ini_filename(None);
     imgui.style_mut().window_rounding = 0.0;
-    
-    let mut renderer = Renderer::init(&mut imgui, &display)
-        .expect("Failed to initialize renderer");
+
+    let mut renderer = Renderer::init(&mut imgui, &display).expect("Failed to initialize renderer");
 
     imgui.set_imgui_key(ImGuiKey::Tab, 0);
     imgui.set_imgui_key(ImGuiKey::LeftArrow, 1);
@@ -465,7 +493,6 @@ fn main() {
     let mut s = State::new();
 
     loop {
-
         s.last_mouse_state = s.mouse_state;
         s.mouse_state.wheel = 0.0;
 
@@ -473,98 +500,92 @@ fn main() {
 
         events_loop.poll_events(|event| {
             use glium::glutin::{
-                DeviceEvent,
-                ElementState,
-                Event,
-                MouseButton,
-                MouseScrollDelta,
-                TouchPhase,
+                DeviceEvent, ElementState, Event, MouseButton, MouseScrollDelta, TouchPhase,
                 WindowEvent,
             };
 
             match event {
-
-                Event::DeviceEvent { event, .. } => {
-                    match event {
-                        DeviceEvent::MouseMotion { delta: (x, y), .. } => {
-                            s.mouse_state.pos.0 += x as i32;
-                            s.mouse_state.pos.1 += y as i32;
-                        },
-                        _ => (),
+                Event::DeviceEvent { event, .. } => match event {
+                    DeviceEvent::MouseMotion { delta: (x, y), .. } => {
+                        s.mouse_state.pos.0 += x as i32;
+                        s.mouse_state.pos.1 += y as i32;
                     }
+                    _ => (),
                 },
 
-                Event::WindowEvent { event, .. } => {
-                    match event {
-                        WindowEvent::Closed => {
-                            s.quit = true;
-                        },
-                        WindowEvent::Resized(w, h) => {
-                            display.gl_window().resize(w, h);
-                        },
-                        WindowEvent::KeyboardInput { input, .. } => {
-                            use glium::glutin::VirtualKeyCode as Key;
-
-                            let pressed = input.state == ElementState::Pressed;
-                            match input.virtual_keycode {
-                                Some(Key::Tab) => imgui.set_key(0, pressed),
-                                Some(Key::Left) => imgui.set_key(1, pressed),
-                                Some(Key::Right) => imgui.set_key(2, pressed),
-                                Some(Key::Up) => imgui.set_key(3, pressed),
-                                Some(Key::Down) => imgui.set_key(4, pressed),
-                                Some(Key::PageUp) => imgui.set_key(5, pressed),
-                                Some(Key::PageDown) => imgui.set_key(6, pressed),
-                                Some(Key::Home) => imgui.set_key(7, pressed),
-                                Some(Key::End) => imgui.set_key(8, pressed),
-                                Some(Key::Delete) => imgui.set_key(9, pressed),
-                                Some(Key::Back) => imgui.set_key(10, pressed),
-                                Some(Key::Return) => imgui.set_key(11, pressed),
-                                Some(Key::Escape) => imgui.set_key(12, pressed),
-                                Some(Key::A) => imgui.set_key(13, pressed),
-                                Some(Key::C) => imgui.set_key(14, pressed),
-                                Some(Key::V) => imgui.set_key(15, pressed),
-                                Some(Key::X) => imgui.set_key(16, pressed),
-                                Some(Key::Y) => imgui.set_key(17, pressed),
-                                Some(Key::Z) => imgui.set_key(18, pressed),
-                                Some(Key::LControl) |
-                                Some(Key::RControl) => imgui.set_key_ctrl(pressed),
-                                Some(Key::LShift) |
-                                Some(Key::RShift) => imgui.set_key_shift(pressed),
-                                Some(Key::LAlt) | Some(Key::RAlt) => imgui.set_key_alt(pressed),
-                                Some(Key::LWin) | Some(Key::RWin) => imgui.set_key_super(pressed),
-                                _ => {}
-                            }
-                        },
-                        WindowEvent::CursorMoved { position: (x, y), .. } => {
-                            if x as i32 != 0 && y as i32 != 0 {
-                                new_absolute_mouse_pos = Some((x as i32, y as i32));
-                            }
-                        },
-                        WindowEvent::MouseInput { state, button, .. } => {
-                            match button {
-                                MouseButton::Left => s.mouse_state.pressed.0 = state == ElementState::Pressed,
-                                MouseButton::Right => s.mouse_state.pressed.1 = state == ElementState::Pressed,
-                                MouseButton::Middle => s.mouse_state.pressed.2 = state == ElementState::Pressed,
-                                _ => {}
-                            }
-                        },
-                        WindowEvent::MouseWheel {
-                            delta: MouseScrollDelta::LineDelta(_, y),
-                            phase: TouchPhase::Moved,
-                            ..
-                        } |
-                        WindowEvent::MouseWheel {
-                            delta: MouseScrollDelta::PixelDelta(_, y),
-                            phase: TouchPhase::Moved,
-                            ..
-                        } => {
-                            s.mouse_state.wheel = y;
-                        },
-                        WindowEvent::ReceivedCharacter(c) => {
-                            imgui.add_input_character(c)
-                        },
-                        _ => (),
+                Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::Closed => {
+                        s.quit = true;
                     }
+                    WindowEvent::Resized(w, h) => {
+                        display.gl_window().resize(w, h);
+                    }
+                    WindowEvent::KeyboardInput { input, .. } => {
+                        use glium::glutin::VirtualKeyCode as Key;
+
+                        let pressed = input.state == ElementState::Pressed;
+                        match input.virtual_keycode {
+                            Some(Key::Tab) => imgui.set_key(0, pressed),
+                            Some(Key::Left) => imgui.set_key(1, pressed),
+                            Some(Key::Right) => imgui.set_key(2, pressed),
+                            Some(Key::Up) => imgui.set_key(3, pressed),
+                            Some(Key::Down) => imgui.set_key(4, pressed),
+                            Some(Key::PageUp) => imgui.set_key(5, pressed),
+                            Some(Key::PageDown) => imgui.set_key(6, pressed),
+                            Some(Key::Home) => imgui.set_key(7, pressed),
+                            Some(Key::End) => imgui.set_key(8, pressed),
+                            Some(Key::Delete) => imgui.set_key(9, pressed),
+                            Some(Key::Back) => imgui.set_key(10, pressed),
+                            Some(Key::Return) => imgui.set_key(11, pressed),
+                            Some(Key::Escape) => imgui.set_key(12, pressed),
+                            Some(Key::A) => imgui.set_key(13, pressed),
+                            Some(Key::C) => imgui.set_key(14, pressed),
+                            Some(Key::V) => imgui.set_key(15, pressed),
+                            Some(Key::X) => imgui.set_key(16, pressed),
+                            Some(Key::Y) => imgui.set_key(17, pressed),
+                            Some(Key::Z) => imgui.set_key(18, pressed),
+                            Some(Key::LControl) | Some(Key::RControl) => {
+                                imgui.set_key_ctrl(pressed)
+                            }
+                            Some(Key::LShift) | Some(Key::RShift) => imgui.set_key_shift(pressed),
+                            Some(Key::LAlt) | Some(Key::RAlt) => imgui.set_key_alt(pressed),
+                            Some(Key::LWin) | Some(Key::RWin) => imgui.set_key_super(pressed),
+                            _ => {}
+                        }
+                    }
+                    WindowEvent::CursorMoved {
+                        position: (x, y), ..
+                    } => {
+                        if x as i32 != 0 && y as i32 != 0 {
+                            new_absolute_mouse_pos = Some((x as i32, y as i32));
+                        }
+                    }
+                    WindowEvent::MouseInput { state, button, .. } => match button {
+                        MouseButton::Left => {
+                            s.mouse_state.pressed.0 = state == ElementState::Pressed
+                        }
+                        MouseButton::Right => {
+                            s.mouse_state.pressed.1 = state == ElementState::Pressed
+                        }
+                        MouseButton::Middle => {
+                            s.mouse_state.pressed.2 = state == ElementState::Pressed
+                        }
+                        _ => {}
+                    },
+                    WindowEvent::MouseWheel {
+                        delta: MouseScrollDelta::LineDelta(_, y),
+                        phase: TouchPhase::Moved,
+                        ..
+                    }
+                    | WindowEvent::MouseWheel {
+                        delta: MouseScrollDelta::PixelDelta(_, y),
+                        phase: TouchPhase::Moved,
+                        ..
+                    } => {
+                        s.mouse_state.wheel = y;
+                    }
+                    WindowEvent::ReceivedCharacter(c) => imgui.add_input_character(c),
+                    _ => (),
                 },
                 _ => (),
             }
@@ -584,15 +605,13 @@ fn main() {
                 s.mouse_state.pos.1 as f32 / scale.1,
             );
 
-            imgui.set_mouse_down(
-                &[
-                    s.mouse_state.pressed.0,
-                    s.mouse_state.pressed.1,
-                    s.mouse_state.pressed.2,
-                    false,
-                    false,
-                ],
-            );
+            imgui.set_mouse_down(&[
+                s.mouse_state.pressed.0,
+                s.mouse_state.pressed.1,
+                s.mouse_state.pressed.2,
+                false,
+                false,
+            ]);
 
             imgui.set_mouse_wheel(s.mouse_state.wheel / scale.1);
         }
@@ -601,14 +620,16 @@ fn main() {
         let size_pixels = gl_window.get_inner_size().unwrap();
         let size_points = {
             let hidpi = gl_window.hidpi_factor();
-            ((size_pixels.0 as f32 / hidpi) as u32, (size_pixels.1 as f32 / hidpi) as u32)
+            (
+                (size_pixels.0 as f32 / hidpi) as u32,
+                (size_pixels.1 as f32 / hidpi) as u32,
+            )
         };
-
 
         {
             let ui = imgui.frame(size_points, size_pixels, s.frame_timer.reset() as f32);
             run(&ui, &mut s);
-        
+
             let mut target = display.draw();
             target.clear_color(0.35, 0.3, 0.3, 1.0);
             renderer.render(&mut target, ui).expect("Rendering failed");
@@ -618,5 +639,5 @@ fn main() {
         if s.quit {
             break;
         }
-    }    
+    }
 }
