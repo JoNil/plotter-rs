@@ -1,5 +1,6 @@
 extern crate arrayvec;
 extern crate byteorder;
+extern crate clamp;
 extern crate glium;
 extern crate nfd;
 extern crate serialport;
@@ -18,7 +19,7 @@ use glium::glutin::{
     GlRequest, WindowBuilder,
 };
 use glium::{Display, Surface};
-use imgui::{FrameSize, ImGui, ImGuiCond, ImGuiKey, ImVec2, Ui};
+use imgui::{FrameSize, ImGui, ImGuiCond, ImGuiKey, ImVec2, StyleVar, Ui};
 use imgui_glium_renderer::Renderer;
 use std::cmp::max;
 use std::fmt;
@@ -28,6 +29,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use clamp::clamp;
 
 mod timer;
 
@@ -132,14 +134,17 @@ struct State {
 
     window_y_scale: f32,
 
+    ch0_pan: f32,
     ch0_scale: f32,
+    ch0_smooth: Arc<Mutex<f32>>,
+    
+    ch1_pan: f32,
     ch1_scale: f32,
 
-    ch0_pan: f32,
-    ch1_pan: f32,
+    rise_value: Arc<Mutex<f32>>,
 
-    rise_value: f32,
-    sink_value: f32,
+    measure_latency: Arc<AtomicBool>,
+
 }
 
 impl State {
@@ -157,12 +162,13 @@ impl State {
             quit: false,
             scroll_factor: 0.0,
             window_y_scale: 1.0,
-            ch0_scale: 1.0,
-            ch1_scale: 1.0,
             ch0_pan: 1.0,
+            ch0_scale: 1.0,
+            ch0_smooth: Arc::new(Mutex::new(0.0)),
             ch1_pan: 1.0,
-            rise_value: 0.0,
-            sink_value: 0.0,
+            ch1_scale: 1.0,
+            rise_value: Arc::new(Mutex::new(0.0)),
+            measure_latency: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -233,6 +239,11 @@ fn open_com_port(state: &mut State) {
         let loading = state.loading.clone();
         let stop_loading = state.stop_loading.clone();
 
+        let measure_latency = state.measure_latency.clone();
+
+        let ch0_smooth = state.ch0_smooth.clone();
+        let rise_value = state.rise_value.clone();
+
         state.loading_thread = Some(thread::spawn(move || {
             let s = serialport::SerialPortSettings {
                 baud_rate: 250000,
@@ -243,7 +254,7 @@ fn open_com_port(state: &mut State) {
                 timeout: Duration::from_millis(1),
             };
 
-            let sp = {
+            let mut sp = {
                 let mut sp = None;
 
                 for i in 1..=9 {
@@ -267,15 +278,19 @@ fn open_com_port(state: &mut State) {
                 }
             };
 
-            let mut reader = BufReader::new(sp);
-
             let mut block_ch0 = Box::new(Block::new());
             let mut block_ch1 = Box::new(Block::new());
+
+            let mut ch0_avg = 0.0;
+
+            let mut latency = timer::Timer::new();
+            let mut last_ligh_on = 0;
+            let mut measuring_cycle = false;
 
             while !stop_loading.load(Ordering::SeqCst) {
                 let mut value = 0;
 
-                match reader.read_u16::<LittleEndian>() {
+                match sp.read_u16::<LittleEndian>() {
                     Ok(v) => {
                         value = v;
                     }
@@ -285,31 +300,65 @@ fn open_com_port(state: &mut State) {
 
                 if value != 0 {
                     let sync = (value >> 15) & 0b1;
-                    let light_on = (value >> 14) & 0b1;
-
-                    let high = (value >> 8) & 0b00011111;
-                    let low = value & 0b00011111;
-
-                    let analog = (high << 5) | low;
 
                     if sync != 0b1 {
-                        reader.read_u8().ok();
+                        sp.read_u8().ok();
                     } else {
-                        if block_ch0.data0.is_full() {
-                            blocks_ch0.lock().unwrap().push(block_ch0);
-                            block_ch0 = Box::new(Block::new());
+
+                        let light_on = (value >> 14) & 0b1;
+
+                        let high = (value >> 8) & 0b00011111;
+                        let low = value & 0b00011111;
+
+                        let analog = (high << 5) | low;
+
+                        let value = 1024.0 - analog as f64;
+
+                        let ch0_smooth_value = *ch0_smooth.lock().unwrap() as f64;
+
+                        ch0_avg = ch0_avg*ch0_smooth_value + value*(1.0 - ch0_smooth_value);
+                        
+                        {
+                            if last_ligh_on == 1 && light_on == 0 {
+                                latency.reset();
+                                measuring_cycle = true;
+                                println!("{:?}", ch0_avg);
+                            }
+
+                            if measuring_cycle && light_on == 1 {
+                                measuring_cycle = false;
+                            }
+
+                            if measuring_cycle && ch0_avg < *rise_value.lock().unwrap() as f64 {
+                                
+                                println!("GOT {}", ch0_avg);
+                                measuring_cycle = false;
+                                let time = latency.reset();
+                                println!("{}", time * 1000.0);
+                            }
+
+                            last_ligh_on = light_on;
                         }
 
-                        if block_ch1.data0.is_full() {
-                            blocks_ch1.lock().unwrap().push(block_ch1);
-                            block_ch1 = Box::new(Block::new());
-                        }
+                        {
+                            if block_ch0.data0.is_full() {
+                                blocks_ch0.lock().unwrap().push(block_ch0);
+                                block_ch0 = Box::new(Block::new());
+                            }
 
-                        block_ch0.push(1024.0 - analog as f64);
-                        block_ch1.push(if light_on == 0b1 { 0.0 } else { 100.0 });
+                            if block_ch1.data0.is_full() {
+                                blocks_ch1.lock().unwrap().push(block_ch1);
+                                block_ch1 = Box::new(Block::new());
+                            }
+
+                            block_ch0.push(ch0_avg);
+                            block_ch1.push(if light_on == 1 { 100.0 } else { 0.0 });
+                        }
                     }
                 }
             }
+
+            loading.store(false, Ordering::SeqCst);
         }));
     }
 }
@@ -369,7 +418,9 @@ fn run(ui: &Ui, state: &mut State) {
                 });
             });
 
-            if ui.is_window_hovered() && state.mouse_state.pressed.0 {
+            let menu_bar_hovered = ui.is_item_hovered();
+
+            if !menu_bar_hovered && ui.is_window_hovered() && state.mouse_state.pressed.0 {
                 state.panning = true;
             }
 
@@ -377,16 +428,20 @@ fn run(ui: &Ui, state: &mut State) {
                 state.panning = false;
             }
 
-            if ui.is_window_hovered() || state.panning {
+            if (!menu_bar_hovered && ui.is_window_hovered()) || state.panning {
                 if state.mouse_state.pressed.0 {
-                    state.pan.0 += state.last_mouse_state.pos.0 as f64 - state.mouse_state.pos.0 as f64;
-                    state.pan.1 += state.last_mouse_state.pos.1 as f64 - state.mouse_state.pos.1 as f64;
+                    state.pan.0 +=
+                        state.last_mouse_state.pos.0 as f64 - state.mouse_state.pos.0 as f64;
+                    state.pan.1 +=
+                        state.last_mouse_state.pos.1 as f64 - state.mouse_state.pos.1 as f64;
                 }
 
                 if state.mouse_state.wheel != 0.0 {
-                    let mouse_centered_x = state.mouse_state.pos.0 as f64 - view_size.0 as f64 / 2.0;
+                    let mouse_centered_x =
+                        state.mouse_state.pos.0 as f64 - view_size.0 as f64 / 2.0;
 
-                    let new_scroll_factor = state.scroll_factor - state.mouse_state.wheel as f64 / 10.0;
+                    let new_scroll_factor =
+                        state.scroll_factor - state.mouse_state.wheel as f64 / 10.0;
 
                     let last_scale = f64::exp(state.scroll_factor);
                     let new_scale = f64::exp(new_scroll_factor);
@@ -394,7 +449,8 @@ fn run(ui: &Ui, state: &mut State) {
                     let mouse_centered_last_scale_x = (state.pan.0 + mouse_centered_x) / last_scale;
                     let mouse_centered_scale_x = (state.pan.0 + mouse_centered_x) / new_scale;
 
-                    state.pan.0 -= (mouse_centered_last_scale_x - mouse_centered_scale_x) * last_scale;
+                    state.pan.0 -=
+                        (mouse_centered_last_scale_x - mouse_centered_scale_x) * last_scale;
 
                     state.scroll_factor = new_scroll_factor;
                 }
@@ -423,7 +479,12 @@ fn run(ui: &Ui, state: &mut State) {
                         if let Some(value) = blocks_ch0.lookup(x_lookup, scale) {
                             state.data.points_ch0.push(ImVec2::new(
                                 x as f32,
-                                ((state.ch0_scale as f64 * state.window_y_scale as f64 * (value + state.ch0_pan as f64)) + state.pan.1 - view_size.1 as f64 / 2.0) as f32,
+                                ((state.ch0_scale as f64
+                                    * state.window_y_scale as f64
+                                    * (value + state.ch0_pan as f64))
+                                    + state.pan.1
+                                    - view_size.1 as f64 / 2.0)
+                                    as f32,
                             ));
                         }
                     }
@@ -435,7 +496,9 @@ fn run(ui: &Ui, state: &mut State) {
                             .iter()
                             .zip(state.data.points_ch0[1..].iter())
                         {
-                            draw_list.add_line((p1.x, -p1.y), (p2.x, -p2.y), 0xdf00dfff).build();
+                            draw_list
+                                .add_line((p1.x, -p1.y), (p2.x, -p2.y), 0xdf00dfff)
+                                .build();
                         }
                     }
                 }
@@ -458,7 +521,12 @@ fn run(ui: &Ui, state: &mut State) {
                         if let Some(value) = blocks_ch1.lookup(x_lookup, scale) {
                             state.data.points_ch1.push(ImVec2::new(
                                 x as f32,
-                                ((state.ch1_scale as f64 * state.window_y_scale as f64 * (value + state.ch1_pan as f64)) + state.pan.1 - view_size.1 as f64 / 2.0) as f32,
+                                ((state.ch1_scale as f64
+                                    * state.window_y_scale as f64
+                                    * (value + state.ch1_pan as f64))
+                                    + state.pan.1
+                                    - view_size.1 as f64 / 2.0)
+                                    as f32,
                             ));
                         }
                     }
@@ -470,16 +538,18 @@ fn run(ui: &Ui, state: &mut State) {
                             .iter()
                             .zip(state.data.points_ch1[1..].iter())
                         {
-                            draw_list.add_line((p1.x, -p1.y), (p2.x, -p2.y), 0xdf1010ff).build();
+                            draw_list
+                                .add_line((p1.x, -p1.y), (p2.x, -p2.y), 0xdf1010ff)
+                                .build();
                         }
                     }
                 }
 
                 for i in -9..10 {
-                    
                     let x1 = 0.0;
                     let x2 = view_size.0 as f32;
-                    let y = (state.pan.1 - view_size.1 as f64 / 2.0) as f32 + (i as f32) * state.window_y_scale * 100.0;
+                    let y = (state.pan.1 - view_size.1 as f64 / 2.0) as f32
+                        + (i as f32) * state.window_y_scale * 100.0;
 
                     if i == 0 {
                         draw_list.add_line((x1, -y), (x2, -y), 0x602a2aff).build();
@@ -489,37 +559,81 @@ fn run(ui: &Ui, state: &mut State) {
                         draw_list.add_line((x1, -y), (x2, -y), 0x2a2a2aff).build();
                     }
                 }
+
+                {
+                    let x1 = 0.0;
+                    let x2 = view_size.0 as f32;
+                    let rise_y = (state.pan.1 - view_size.1 as f64 / 2.0) as f32
+                        + state.window_y_scale * *state.rise_value.lock().unwrap();
+
+                    draw_list
+                        .add_line((x1, -rise_y), (x2, -rise_y), 0xa0ff2a2a)
+                        .build();
+                }
             }
 
-            ui.window(im_str!("Properties"))
-                .size((400.0, 600.0), ImGuiCond::FirstUseEver)
-                .position((25.0, 50.0), ImGuiCond::FirstUseEver)
-                .movable(true)
-                .resizable(true)
-                .title_bar(true)
-                .collapsible(true)
-                .build(|| {
+            ui.with_style_vars(
+                &[StyleVar::FrameRounding(3.0), StyleVar::WindowRounding(3.0)],
+                || {
+                    ui.window(im_str!("Properties"))
+                        .size((400.0, 600.0), ImGuiCond::FirstUseEver)
+                        .position((25.0, 50.0), ImGuiCond::FirstUseEver)
+                        .movable(true)
+                        .resizable(true)
+                        .title_bar(true)
+                        .collapsible(true)
+                        .build(|| {
+                            ui.drag_float(im_str!("Ch 0 pan"), &mut state.ch0_pan)
+                                .speed(0.1)
+                                .build();
+                            ui.drag_float(im_str!("Ch 0 scale"), &mut state.ch0_scale)
+                                .speed(0.001)
+                                .build();
+                            if ui.drag_float(im_str!("Ch 0 smooth"), &mut state.ch0_smooth.lock().unwrap())
+                                .speed(0.001)
+                                .min(0.0)
+                                .max(1.0)
+                                .build() {
+                                    let mut lock = state.ch0_smooth.lock().unwrap();
+                                    *lock = clamp(0.0, *lock, 1.0);
+                                }
 
-                    ui.drag_float(im_str!("Ch 0 pan"), &mut state.ch0_pan).speed(0.1).build();
-                    ui.drag_float(im_str!("Ch 0 scale"), &mut state.ch0_scale).speed(0.001).build();
+                            ui.drag_float(im_str!("Ch 1 pan"), &mut state.ch1_pan)
+                                .speed(0.1)
+                                .build();
+                            ui.drag_float(im_str!("Ch 1 scale"), &mut state.ch1_scale)
+                                .speed(0.001)
+                                .build();
 
-                    ui.drag_float(im_str!("Ch 1 pan"), &mut state.ch1_pan).speed(0.1).build();
-                    ui.drag_float(im_str!("Ch 1 scale"), &mut state.ch1_scale).speed(0.001).build();
-                    
-                    ui.drag_float(im_str!("Window Y Scale"), &mut state.window_y_scale).speed(0.001).build();
-                    
-                    ui.drag_float(im_str!("Rise Value"), &mut state.rise_value).speed(0.001).build();
-                    ui.drag_float(im_str!("Sink Value"), &mut state.sink_value).speed(0.001).build();
+                            ui.drag_float(im_str!("Window Y Scale"), &mut state.window_y_scale)
+                                .speed(0.001)
+                                .build();
 
-                    ui.text(im_str!(
-                        "Fps: {:.1} {:.2} ms",
-                        ui.framerate(),
-                        1000.0 / ui.framerate()
-                    ));
-                    ui.text(im_str!("Zoom {:?}", scale));
+                            ui.drag_float(im_str!("Rise Value"), &mut state.rise_value.lock().unwrap())
+                                .speed(0.1)
+                                .build();
 
-                    ui.text(im_str!("{:#?}", state));
-                });
+                            if state.measure_latency.load(Ordering::SeqCst) == false {
+                                if ui.button(im_str!("Start Measurement"), ImVec2::new(0.0, 0.0)) {
+                                    state.measure_latency.store(true, Ordering::SeqCst);
+                                }
+                            } else {
+                                if ui.button(im_str!("Stop Measurement"), ImVec2::new(0.0, 0.0)) {
+                                    state.measure_latency.store(false, Ordering::SeqCst);
+                                }
+                            }
+
+                            ui.text(im_str!(
+                                "Fps: {:.1} {:.2} ms",
+                                ui.framerate(),
+                                1000.0 / ui.framerate()
+                            ));
+                            ui.text(im_str!("Zoom {:?}", scale));
+
+                            ui.text(im_str!("{:#?}", state));
+                        });
+                },
+            );
         });
 }
 

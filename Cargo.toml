@@ -6,6 +6,7 @@ authors = ["Jonathan Nilsson"]
 [dependencies]
 arrayvec = "0.4.7"
 byteorder = "1"
+clamp = "0.1.0"
 glium = "0.22"
 glutin = "0.17"
 imgui = "0.0.21"
