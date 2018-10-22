@@ -14,10 +14,11 @@ extern crate winapi;
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use glium::glutin::{
-    Api, ContextBuilder, EventsLoop, GlContext, GlProfile, GlRequest, WindowBuilder,
+    dpi::LogicalPosition, dpi::LogicalSize, Api, ContextBuilder, EventsLoop, GlContext, GlProfile,
+    GlRequest, WindowBuilder,
 };
 use glium::{Display, Surface};
-use imgui::{ImGui, ImGuiCond, ImGuiKey, ImVec2, Ui};
+use imgui::{FrameSize, ImGui, ImGuiCond, ImGuiKey, ImVec2, Ui};
 use imgui_glium_renderer::Renderer;
 use std::cmp::max;
 use std::fmt;
@@ -118,6 +119,7 @@ struct State {
     data: Data,
 
     pan: (f64, f64),
+    panning: bool,
 
     frame_timer: timer::Timer,
 
@@ -127,6 +129,17 @@ struct State {
     quit: bool,
 
     scroll_factor: f64,
+
+    window_y_scale: f32,
+
+    ch0_scale: f32,
+    ch1_scale: f32,
+
+    ch0_pan: f32,
+    ch1_pan: f32,
+
+    rise_value: f32,
+    sink_value: f32,
 }
 
 impl State {
@@ -137,11 +150,19 @@ impl State {
             loading_thread: None,
             data: Data::new(),
             pan: (0.0, 0.0),
+            panning: false,
             frame_timer: timer::Timer::new(),
             mouse_state: MouseState::new(),
             last_mouse_state: MouseState::new(),
             quit: false,
             scroll_factor: 0.0,
+            window_y_scale: 1.0,
+            ch0_scale: 1.0,
+            ch1_scale: 1.0,
+            ch0_pan: 1.0,
+            ch1_pan: 1.0,
+            rise_value: 0.0,
+            sink_value: 0.0,
         }
     }
 }
@@ -284,8 +305,8 @@ fn open_com_port(state: &mut State) {
                             block_ch1 = Box::new(Block::new());
                         }
 
-                        block_ch0.push(analog as f64 / 10.0);
-                        block_ch1.push(if light_on == 0b1 { 80.0 } else { 100.0 });
+                        block_ch0.push(1024.0 - analog as f64);
+                        block_ch1.push(if light_on == 0b1 { 0.0 } else { 100.0 });
                     }
                 }
             }
@@ -296,27 +317,6 @@ fn open_com_port(state: &mut State) {
 fn run(ui: &Ui, state: &mut State) {
     let view_size = ui.imgui().display_size();
 
-    if state.mouse_state.pressed.0 {
-        state.pan.0 += state.last_mouse_state.pos.0 as f64 - state.mouse_state.pos.0 as f64;
-        state.pan.1 -= state.last_mouse_state.pos.1 as f64 - state.mouse_state.pos.1 as f64;
-    }
-
-    if state.mouse_state.wheel != 0.0 {
-        let mouse_centered_x = state.mouse_state.pos.0 as f64 - view_size.0 as f64 / 2.0;
-
-        let new_scroll_factor = state.scroll_factor - state.mouse_state.wheel as f64 / 10.0;
-
-        let last_scale = f64::exp(state.scroll_factor);
-        let new_scale = f64::exp(new_scroll_factor);
-
-        let mouse_centered_last_scale_x = (state.pan.0 + mouse_centered_x) / last_scale;
-        let mouse_centered_scale_x = (state.pan.0 + mouse_centered_x) / new_scale;
-
-        state.pan.0 -= (mouse_centered_last_scale_x - mouse_centered_scale_x) * last_scale;
-
-        state.scroll_factor = new_scroll_factor;
-    }
-
     ui.window(im_str!("Main"))
         .size(ui.imgui().display_size(), ImGuiCond::Always)
         .position((0.0, 0.0), ImGuiCond::Always)
@@ -325,6 +325,7 @@ fn run(ui: &Ui, state: &mut State) {
         .title_bar(false)
         .collapsible(false)
         .menu_bar(true)
+        .no_bring_to_front_on_focus(true)
         .build(|| {
             ui.menu_bar(|| {
                 ui.menu(im_str!("File")).build(|| {
@@ -368,10 +369,41 @@ fn run(ui: &Ui, state: &mut State) {
                 });
             });
 
-            ui.with_window_draw_list(|d| {
-                let scale = f64::exp(state.scroll_factor as f64);
+            if ui.is_window_hovered() && state.mouse_state.pressed.0 {
+                state.panning = true;
+            }
 
-                ui.text(im_str!("Zoom {:?}", scale));
+            if !state.mouse_state.pressed.0 {
+                state.panning = false;
+            }
+
+            if ui.is_window_hovered() || state.panning {
+                if state.mouse_state.pressed.0 {
+                    state.pan.0 += state.last_mouse_state.pos.0 as f64 - state.mouse_state.pos.0 as f64;
+                    state.pan.1 += state.last_mouse_state.pos.1 as f64 - state.mouse_state.pos.1 as f64;
+                }
+
+                if state.mouse_state.wheel != 0.0 {
+                    let mouse_centered_x = state.mouse_state.pos.0 as f64 - view_size.0 as f64 / 2.0;
+
+                    let new_scroll_factor = state.scroll_factor - state.mouse_state.wheel as f64 / 10.0;
+
+                    let last_scale = f64::exp(state.scroll_factor);
+                    let new_scale = f64::exp(new_scroll_factor);
+
+                    let mouse_centered_last_scale_x = (state.pan.0 + mouse_centered_x) / last_scale;
+                    let mouse_centered_scale_x = (state.pan.0 + mouse_centered_x) / new_scale;
+
+                    state.pan.0 -= (mouse_centered_last_scale_x - mouse_centered_scale_x) * last_scale;
+
+                    state.scroll_factor = new_scroll_factor;
+                }
+            }
+
+            let scale = f64::exp(state.scroll_factor as f64);
+
+            {
+                let draw_list = ui.get_window_draw_list();
 
                 {
                     let blocks_ch0 = state.data.blocks_ch0.lock().unwrap();
@@ -391,12 +423,21 @@ fn run(ui: &Ui, state: &mut State) {
                         if let Some(value) = blocks_ch0.lookup(x_lookup, scale) {
                             state.data.points_ch0.push(ImVec2::new(
                                 x as f32,
-                                (10.0 * value + state.pan.1 + view_size.1 as f64 / 2.0) as f32,
+                                ((state.ch0_scale as f64 * state.window_y_scale as f64 * (value + state.ch0_pan as f64)) + state.pan.1 - view_size.1 as f64 / 2.0) as f32,
                             ));
                         }
                     }
 
-                    d.add_poly_line(&state.data.points_ch0, 0xdf00dfff, false, 1.0, true);
+                    if state.data.points_ch0.len() > 1 {
+                        for (p1, p2) in state
+                            .data
+                            .points_ch0
+                            .iter()
+                            .zip(state.data.points_ch0[1..].iter())
+                        {
+                            draw_list.add_line((p1.x, -p1.y), (p2.x, -p2.y), 0xdf00dfff).build();
+                        }
+                    }
                 }
 
                 {
@@ -417,22 +458,68 @@ fn run(ui: &Ui, state: &mut State) {
                         if let Some(value) = blocks_ch1.lookup(x_lookup, scale) {
                             state.data.points_ch1.push(ImVec2::new(
                                 x as f32,
-                                (10.0 * value + state.pan.1 + view_size.1 as f64 / 2.0) as f32,
+                                ((state.ch1_scale as f64 * state.window_y_scale as f64 * (value + state.ch1_pan as f64)) + state.pan.1 - view_size.1 as f64 / 2.0) as f32,
                             ));
                         }
                     }
 
-                    d.add_poly_line(&state.data.points_ch1, 0xdf1010ff, false, 1.0, true);
+                    if state.data.points_ch0.len() > 1 {
+                        for (p1, p2) in state
+                            .data
+                            .points_ch1
+                            .iter()
+                            .zip(state.data.points_ch1[1..].iter())
+                        {
+                            draw_list.add_line((p1.x, -p1.y), (p2.x, -p2.y), 0xdf1010ff).build();
+                        }
+                    }
                 }
-            });
 
-            ui.text(im_str!(
-                "Fps: {:.1} {:.2} ms",
-                ui.framerate(),
-                1000.0 / ui.framerate()
-            ));
+                for i in -9..10 {
+                    
+                    let x1 = 0.0;
+                    let x2 = view_size.0 as f32;
+                    let y = (state.pan.1 - view_size.1 as f64 / 2.0) as f32 + (i as f32) * state.window_y_scale * 100.0;
 
-            ui.text(im_str!("{:#?}", state));
+                    if i == 0 {
+                        draw_list.add_line((x1, -y), (x2, -y), 0x602a2aff).build();
+                    } else if i < 0 {
+                        draw_list.add_line((x1, -y), (x2, -y), 0x2a2a2aff).build();
+                    } else {
+                        draw_list.add_line((x1, -y), (x2, -y), 0x2a2a2aff).build();
+                    }
+                }
+            }
+
+            ui.window(im_str!("Properties"))
+                .size((400.0, 600.0), ImGuiCond::FirstUseEver)
+                .position((25.0, 50.0), ImGuiCond::FirstUseEver)
+                .movable(true)
+                .resizable(true)
+                .title_bar(true)
+                .collapsible(true)
+                .build(|| {
+
+                    ui.drag_float(im_str!("Ch 0 pan"), &mut state.ch0_pan).speed(0.1).build();
+                    ui.drag_float(im_str!("Ch 0 scale"), &mut state.ch0_scale).speed(0.001).build();
+
+                    ui.drag_float(im_str!("Ch 1 pan"), &mut state.ch1_pan).speed(0.1).build();
+                    ui.drag_float(im_str!("Ch 1 scale"), &mut state.ch1_scale).speed(0.001).build();
+                    
+                    ui.drag_float(im_str!("Window Y Scale"), &mut state.window_y_scale).speed(0.001).build();
+                    
+                    ui.drag_float(im_str!("Rise Value"), &mut state.rise_value).speed(0.001).build();
+                    ui.drag_float(im_str!("Sink Value"), &mut state.sink_value).speed(0.001).build();
+
+                    ui.text(im_str!(
+                        "Fps: {:.1} {:.2} ms",
+                        ui.framerate(),
+                        1000.0 / ui.framerate()
+                    ));
+                    ui.text(im_str!("Zoom {:?}", scale));
+
+                    ui.text(im_str!("{:#?}", state));
+                });
         });
 }
 
@@ -460,7 +547,7 @@ fn main() {
             .with_gl(GlRequest::Specific(Api::OpenGl, (4, 3)));
         let window = WindowBuilder::new()
             .with_title("plotter-rs")
-            .with_dimensions(1024, 768);
+            .with_dimensions((1024u32, 768u32).into());
         Display::new(window, context, &events_loop).unwrap()
     };
 
@@ -514,11 +601,11 @@ fn main() {
                 },
 
                 Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::Closed => {
+                    WindowEvent::CloseRequested => {
                         s.quit = true;
                     }
-                    WindowEvent::Resized(w, h) => {
-                        display.gl_window().resize(w, h);
+                    WindowEvent::Resized(LogicalSize { width, height }) => {
+                        display.gl_window().resize((width, height).into());
                     }
                     WindowEvent::KeyboardInput { input, .. } => {
                         use glium::glutin::VirtualKeyCode as Key;
@@ -554,7 +641,8 @@ fn main() {
                         }
                     }
                     WindowEvent::CursorMoved {
-                        position: (x, y), ..
+                        position: LogicalPosition { x, y },
+                        ..
                     } => {
                         if x as i32 != 0 && y as i32 != 0 {
                             new_absolute_mouse_pos = Some((x as i32, y as i32));
@@ -576,13 +664,15 @@ fn main() {
                         delta: MouseScrollDelta::LineDelta(_, y),
                         phase: TouchPhase::Moved,
                         ..
+                    } => {
+                        s.mouse_state.wheel = y;
                     }
-                    | WindowEvent::MouseWheel {
-                        delta: MouseScrollDelta::PixelDelta(_, y),
+                    WindowEvent::MouseWheel {
+                        delta: MouseScrollDelta::PixelDelta(LogicalPosition { y, .. }),
                         phase: TouchPhase::Moved,
                         ..
                     } => {
-                        s.mouse_state.wheel = y;
+                        s.mouse_state.wheel = y as f32;
                     }
                     WindowEvent::ReceivedCharacter(c) => imgui.add_input_character(c),
                     _ => (),
@@ -605,7 +695,7 @@ fn main() {
                 s.mouse_state.pos.1 as f32 / scale.1,
             );
 
-            imgui.set_mouse_down(&[
+            imgui.set_mouse_down([
                 s.mouse_state.pressed.0,
                 s.mouse_state.pressed.1,
                 s.mouse_state.pressed.2,
@@ -618,16 +708,16 @@ fn main() {
 
         let gl_window = display.gl_window();
         let size_pixels = gl_window.get_inner_size().unwrap();
-        let size_points = {
-            let hidpi = gl_window.hidpi_factor();
-            (
-                (size_pixels.0 as f32 / hidpi) as u32,
-                (size_pixels.1 as f32 / hidpi) as u32,
-            )
-        };
 
         {
-            let ui = imgui.frame(size_points, size_pixels, s.frame_timer.reset() as f32);
+            let ui = imgui.frame(
+                FrameSize::new(
+                    size_pixels.width,
+                    size_pixels.height,
+                    gl_window.get_hidpi_factor(),
+                ),
+                s.frame_timer.reset() as f32,
+            );
             run(&ui, &mut s);
 
             let mut target = display.draw();

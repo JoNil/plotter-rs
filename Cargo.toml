@@ -6,14 +6,19 @@ authors = ["Jonathan Nilsson"]
 [dependencies]
 arrayvec = "0.4.7"
 byteorder = "1"
-glium = "0.20"
-glutin = "0.12"
-imgui = { path = "../imgui-rs" }
-imgui-glium-renderer = { path = "../imgui-rs/imgui-glium-renderer" }
-imgui-sys = { path = "../imgui-rs/imgui-sys" }
+glium = "0.22"
+glutin = "0.17"
+imgui = "0.0.21"
+imgui-glium-renderer = "0.0.21"
 nfd = "0.0.4"
 serialport = "3"
-time = "0.1.39"
+time = "0.1.40"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winuser"] }
+
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
