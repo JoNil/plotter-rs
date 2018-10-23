@@ -5,6 +5,7 @@ extern crate glium;
 extern crate nfd;
 extern crate serialport;
 extern crate time;
+extern crate image;
 
 #[macro_use]
 extern crate imgui;
@@ -16,7 +17,7 @@ extern crate winapi;
 use byteorder::{LittleEndian, ReadBytesExt};
 use glium::glutin::{
     dpi::LogicalPosition, dpi::LogicalSize, Api, ContextBuilder, EventsLoop, GlContext, GlProfile,
-    GlRequest, WindowBuilder,
+    GlRequest, WindowBuilder, Icon,
 };
 use glium::{Display, Surface};
 use imgui::{FrameSize, ImGui, ImGuiCond, ImGuiKey, ImVec2, StyleVar, Ui};
@@ -653,6 +654,10 @@ fn detect_mouse_button_release_outside_window(state: &mut State) {
 fn detect_mouse_button_release_outside_window(_state: &mut State) {}
 
 fn main() {
+
+    let icon = image::open("icon/plotter-rs.png").unwrap().to_rgba();
+    let (icon_w, icon_h) = (icon.width(), icon.height());
+
     let mut events_loop = EventsLoop::new();
 
     let display = {
@@ -661,7 +666,8 @@ fn main() {
             .with_gl(GlRequest::Specific(Api::OpenGl, (4, 3)));
         let window = WindowBuilder::new()
             .with_title("plotter-rs")
-            .with_dimensions((1024u32, 768u32).into());
+            .with_dimensions((1024u32, 768u32).into())
+            .with_window_icon(Some(Icon::from_rgba(icon.into_raw(), icon_w, icon_h).unwrap()));
         Display::new(window, context, &events_loop).unwrap()
     };
 
