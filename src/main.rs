@@ -693,7 +693,12 @@ fn main() {
 
     let mut s = State::new();
 
+    let mut begin_frame = time::precise_time_s();
+
     loop {
+
+        begin_frame = time::precise_time_s();
+
         s.last_mouse_state = s.mouse_state;
         s.mouse_state.wheel = 0.0;
 
@@ -842,6 +847,10 @@ fn main() {
 
         if s.quit {
             break;
+        }
+
+        while time::precise_time_s() - begin_frame < 1.0 / 120.0 {
+            thread::yield_now();
         }
     }
 }
