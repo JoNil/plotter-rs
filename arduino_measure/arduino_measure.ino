@@ -22,6 +22,7 @@ volatile uint32_t time_3 = 0;
 
 void loop()
 {
+    uint32_t last ;
     uint32_t now = micros();
     uint32_t rng = random(0, 100000);
 
@@ -63,7 +64,7 @@ void loop()
     uint32_t light_level = analogRead(analogInPin);
 
     uint8_t high = 0b10000000 | (uint8_t)light_state | ((light_level >> 5) & 0b00011111);
-    uint8_t low =  0b00000000 |                        (light_level & 0b00011111);
+    uint8_t low  = 0b00000000 |                        (light_level & 0b00011111);
 
     Serial.write(high);
     Serial.write(low);

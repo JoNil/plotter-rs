@@ -255,7 +255,7 @@ fn open_com_port(state: &mut State) {
                 timeout: Duration::from_millis(1),
             };
 
-            let mut sp = {
+            let sp = {
                 let mut sp = None;
 
                 for i in 1..=9 {
@@ -279,6 +279,8 @@ fn open_com_port(state: &mut State) {
                 }
             };
 
+            let mut reader = BufReader::new(sp);
+
             let mut block_ch0 = Box::new(Block::new());
             let mut block_ch1 = Box::new(Block::new());
 
@@ -289,21 +291,25 @@ fn open_com_port(state: &mut State) {
             let mut measuring_cycle = false;
 
             while !stop_loading.load(Ordering::SeqCst) {
-                let mut value = 0;
 
-                match sp.read_u16::<LittleEndian>() {
-                    Ok(v) => {
-                        value = v;
+                let mut value = 0;
+                
+                if value == 0 {
+                    match reader.read_u16::<LittleEndian>() {
+                        Ok(v) => {
+                            value = v;
+                        }
+                        Err(ref e) if e.kind() == ErrorKind::TimedOut => (),
+                        Err(e) => println!("{:?}", e),
                     }
-                    Err(ref e) if e.kind() == ErrorKind::TimedOut => (),
-                    Err(e) => println!("{:?}", e),
                 }
 
-                if value != 0 {
+                if value != 0  {
                     let sync = (value >> 15) & 0b1;
 
                     if sync != 0b1 {
-                        sp.read_u8().ok();
+                        println!("OUT OF SYNC");
+                        reader.read_u8().ok();
                     } else {
 
                         let light_on = (value >> 14) & 0b1;
@@ -313,11 +319,11 @@ fn open_com_port(state: &mut State) {
 
                         let analog = (high << 5) | low;
 
-                        let value = 1024.0 - analog as f64;
+                        let analog_flipped = 1024.0 - analog as f64;
 
                         let ch0_smooth_value = *ch0_smooth.lock().unwrap() as f64;
 
-                        ch0_avg = ch0_avg*ch0_smooth_value + value*(1.0 - ch0_smooth_value);
+                        ch0_avg = ch0_avg*ch0_smooth_value + analog_flipped*(1.0 - ch0_smooth_value);
                         
                         {
                             if last_ligh_on == 1 && light_on == 0 {
@@ -699,7 +705,7 @@ fn main() {
 
     let mut s = State::new();
 
-    let mut begin_frame = time::precise_time_s();
+    let mut begin_frame;
 
     loop {
 
