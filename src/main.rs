@@ -143,8 +143,6 @@ struct State {
     ch1_scale: f32,
 
     rise_value: Arc<Mutex<f32>>,
-
-    measure_latency: Arc<AtomicBool>,
 }
 
 impl State {
@@ -168,7 +166,6 @@ impl State {
             ch1_pan: 1.0,
             ch1_scale: 1.0,
             rise_value: Arc::new(Mutex::new(0.0)),
-            measure_latency: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -238,8 +235,6 @@ fn open_com_port(state: &mut State) {
         let blocks_ch1 = state.data.blocks_ch1.clone();
         let loading = state.loading.clone();
         let stop_loading = state.stop_loading.clone();
-
-        let measure_latency = state.measure_latency.clone();
 
         let ch0_smooth = state.ch0_smooth.clone();
         let rise_value = state.rise_value.clone();
@@ -641,16 +636,6 @@ fn run(ui: &Ui, state: &mut State) {
                             ui.drag_float(im_str!("Rise Value"), &mut state.rise_value.lock().unwrap())
                                 .speed(0.1)
                                 .build();
-
-                            if state.measure_latency.load(Ordering::SeqCst) == false {
-                                if ui.button(im_str!("Start Measurement"), ImVec2::new(0.0, 0.0)) {
-                                    state.measure_latency.store(true, Ordering::SeqCst);
-                                }
-                            } else {
-                                if ui.button(im_str!("Stop Measurement"), ImVec2::new(0.0, 0.0)) {
-                                    state.measure_latency.store(false, Ordering::SeqCst);
-                                }
-                            }
 
                             ui.text(im_str!(
                                 "Fps: {:.1} {:.2} ms",
