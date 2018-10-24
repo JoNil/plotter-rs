@@ -66,7 +66,14 @@ void loop()
     uint8_t high = 0b10000000 | (uint8_t)light_state | ((light_level >> 5) & 0b00011111);
     uint8_t low  = 0b00000000 |                        (light_level & 0b00011111);
 
-    Serial.write(high);
     Serial.write(low);
+    Serial.write(high);
+
+    uint32_t time_send = now >> 4;
+    
+    Serial.write((time_send)       & 0x7f);
+    Serial.write((time_send >> 7)  & 0x7f);
+    Serial.write((time_send >> 14) & 0x7f);
+    Serial.write((time_send >> 21) & 0x7f);
 }
 

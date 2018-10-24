@@ -14,7 +14,7 @@ extern crate imgui_glium_renderer;
 #[cfg(windows)]
 extern crate winapi;
 
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder::{ByteOrder, LittleEndian};
 use glium::glutin::{
     dpi::LogicalPosition, dpi::LogicalSize, Api, ContextBuilder, EventsLoop, GlContext, GlProfile,
     GlRequest, WindowBuilder, Icon,
@@ -25,7 +25,7 @@ use imgui_glium_renderer::Renderer;
 use std::cmp::max;
 use std::fmt;
 use std::fs::File;
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -145,7 +145,6 @@ struct State {
     rise_value: Arc<Mutex<f32>>,
 
     measure_latency: Arc<AtomicBool>,
-
 }
 
 impl State {
@@ -255,7 +254,7 @@ fn open_com_port(state: &mut State) {
                 timeout: Duration::from_millis(1),
             };
 
-            let sp = {
+            let mut sp = {
                 let mut sp = None;
 
                 for i in 1..=9 {
@@ -279,37 +278,40 @@ fn open_com_port(state: &mut State) {
                 }
             };
 
-            let mut reader = BufReader::new(sp);
+            let mut buffer = Vec::new();
 
             let mut block_ch0 = Box::new(Block::new());
             let mut block_ch1 = Box::new(Block::new());
 
             let mut ch0_avg = 0.0;
 
-            let mut latency = timer::Timer::new();
+            let mut start_timestamp = 0;
             let mut last_ligh_on = 0;
             let mut measuring_cycle = false;
 
             while !stop_loading.load(Ordering::SeqCst) {
-
-                let mut value = 0;
                 
-                if value == 0 {
-                    match reader.read_u16::<LittleEndian>() {
-                        Ok(v) => {
-                            value = v;
+                {
+                    let mut receive_buffer = [0; 6];
+
+                    match sp.read(&mut receive_buffer) {
+                        Ok(amt) => {
+                            buffer.extend_from_slice(&receive_buffer[..amt]);
                         }
                         Err(ref e) if e.kind() == ErrorKind::TimedOut => (),
                         Err(e) => println!("{:?}", e),
                     }
                 }
 
-                if value != 0  {
+                if buffer.len() > 6 {
+
+                    let value = LittleEndian::read_u16(&buffer[..2]);
+                    
                     let sync = (value >> 15) & 0b1;
 
                     if sync != 0b1 {
                         println!("OUT OF SYNC");
-                        reader.read_u8().ok();
+                        buffer.remove(0);
                     } else {
 
                         let light_on = (value >> 14) & 0b1;
@@ -324,12 +326,27 @@ fn open_com_port(state: &mut State) {
                         let ch0_smooth_value = *ch0_smooth.lock().unwrap() as f64;
 
                         ch0_avg = ch0_avg*ch0_smooth_value + analog_flipped*(1.0 - ch0_smooth_value);
-                        
+
+                        let time = {
+                            let time_packed = LittleEndian::read_u32(&buffer[2..6]);
+
+                            // The high bit in every byte of time_packed is 0 becouse of the sync bit 
+                            // in the high byte of value above. So we need to unpack this into a proper u32.
+                            // The bottom 4 bit of the u32 is discarded on the arduino to make room.
+
+                            let time = 
+                                ( ((time_packed >> 3) & 0x0fe0_0000)
+                                | ((time_packed >> 2) & 0x001f_c000)
+                                | ((time_packed >> 1) & 0x0000_3f80)
+                                | ((time_packed)      & 0x0000_007f)) << 4;
+
+                            time
+                        };
+
                         {
                             if last_ligh_on == 1 && light_on == 0 {
-                                latency.reset();
+                                start_timestamp = time;
                                 measuring_cycle = true;
-                                println!("{:?}", ch0_avg);
                             }
 
                             if measuring_cycle && light_on == 1 {
@@ -337,11 +354,9 @@ fn open_com_port(state: &mut State) {
                             }
 
                             if measuring_cycle && ch0_avg < *rise_value.lock().unwrap() as f64 {
-                                
-                                println!("GOT {}", ch0_avg);
                                 measuring_cycle = false;
-                                let time = latency.reset();
-                                println!("{}", time * 1000.0);
+                                let latency = time - start_timestamp;
+                                println!("{}", latency as f64 / 1000.0);
                             }
 
                             last_ligh_on = light_on;
@@ -361,6 +376,13 @@ fn open_com_port(state: &mut State) {
                             block_ch0.push(ch0_avg);
                             block_ch1.push(if light_on == 1 { 100.0 } else { 0.0 });
                         }
+
+                        buffer.remove(0);
+                        buffer.remove(0);
+                        buffer.remove(0);
+                        buffer.remove(0);
+                        buffer.remove(0);
+                        buffer.remove(0);
                     }
                 }
             }
