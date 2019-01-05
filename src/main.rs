@@ -252,7 +252,7 @@ fn open_com_port(state: &mut State) {
             let mut sp = {
                 let mut sp = None;
 
-                for i in 1..=9 {
+                for i in 1..=30 {
                     let port = format!("COM{}", i);
 
                     match serialport::open_with_settings(&port, &s) {
